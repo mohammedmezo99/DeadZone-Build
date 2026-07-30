@@ -1,0 +1,148 @@
+name: "DeadZone • One-shot workflow-only cleanup"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/_make_workflow_only.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout launcher
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: main
+          path: launcher
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Convert canonical workflows to private runtime helpers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("launcher")
+          workflow_dir = root / ".github" / "workflows"
+          keep = {
+              "MEZO_Lite.yml",
+              "gamingplus.yml",
+              "DeadZone_Port.yml",
+              "legend.yml",
+              "ninja.yml",
+              "frameworkpatcher.yml",
+          }
+
+          token = "${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}"
+          checkout_block = (
+              "\n"
+              "      - name: Load private DeadZone runtime\n"
+              "        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683\n"
+              "        with:\n"
+              "          repository: mohammedmezo99/DeadZone-Secrets\n"
+              f"          token: {token}\n"
+              "          ref: main\n"
+              "          path: .deadzone-secrets\n"
+              "          fetch-depth: 1\n"
+              "          persist-credentials: false\n"
+          )
+
+          for name in sorted(keep):
+              path = workflow_dir / name
+              if not path.is_file():
+                  raise SystemExit(f"Missing canonical workflow: {name}")
+
+              text = path.read_text(encoding="utf-8")
+              text = text.replace(
+                  'bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh"',
+                  'bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh"',
+              )
+              text = text.replace(
+                  "bash scripts/emit_stage.sh",
+                  'bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh"',
+              )
+              text = text.replace(
+                  "python3 scripts/send_telemetry.py",
+                  'python3 "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/send_telemetry.py"',
+              )
+
+              # Current private engines live under mohammedmezo99.
+              text = text.replace("hypermezo4-create/DeadZone_GamingPlus", "mohammedmezo99/DeadZone_GamingPlus")
+              text = text.replace("hypermezo4-create/DeadZone_Legend", "mohammedmezo99/DeadZone_Legend")
+              text = text.replace("hypermezo4-create/DeadZone_Ninja", "mohammedmezo99/DeadZone_Ninja")
+
+              if ".deadzone-secrets/runtime/" in text and "repository: mohammedmezo99/DeadZone-Secrets" not in text:
+                  match = re.search(r"(?mi)^\s{6}- name: .*checkout.*launcher.*$", text)
+                  if match is None:
+                      raise SystemExit(f"Could not locate launcher checkout in {name}")
+                  credentials = text.find("persist-credentials: false", match.end())
+                  if credentials < 0:
+                      raise SystemExit(f"Could not locate launcher checkout end in {name}")
+                  end = text.find("\n", credentials)
+                  end = len(text) if end < 0 else end + 1
+                  text = text[:end] + checkout_block + text[end:]
+
+              if "scripts/" in text:
+                  raise SystemExit(f"{name} still depends on a public scripts/ path")
+
+              path.write_text(text, encoding="utf-8")
+
+          # Delete every non-canonical workflow from the working tree.
+          for path in workflow_dir.glob("*"):
+              if path.is_file() and path.name not in keep:
+                  path.unlink()
+          PY
+
+      - name: Remove every public file outside workflows
+        working-directory: launcher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              .github/workflows/*) ;;
+              *) git rm -f -- "$file" ;;
+            esac
+          done < <(git ls-files -z)
+
+          git add -A .github/workflows
+
+          remaining="$(git ls-files | grep -v '^.github/workflows/' || true)"
+          if [[ -n "$remaining" ]]; then
+            echo "Unexpected files remain outside workflows:" >&2
+            printf '%s\n' "$remaining" >&2
+            exit 1
+          fi
+
+          for expected in \
+            .github/workflows/MEZO_Lite.yml \
+            .github/workflows/gamingplus.yml \
+            .github/workflows/DeadZone_Port.yml \
+            .github/workflows/legend.yml \
+            .github/workflows/ninja.yml \
+            .github/workflows/frameworkpatcher.yml; do
+            [[ -f "$expected" ]] || { echo "Missing $expected" >&2; exit 1; }
+          done
+
+      - name: Commit workflow-only launcher
+        working-directory: launcher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name "DeadZone Automation"
+          git config user.email "deadzone-automation@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            echo "Repository is already workflow-only."
+            exit 0
+          fi
+          git commit -m "cleanup: keep public launcher workflows only"
+          git push origin HEAD:main
