@@ -74,11 +74,6 @@ jobs:
     env:
       CONTROL_BOT_CONTRACT_URL: https://deadzone-mezo-v3-20260726.fly.dev/contract/resolve
       CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
-      BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
-      RCLONE_REMOTE_NAME: ${{ secrets.RCLONE_REMOTE_NAME }}
-      RCLONE_UPLOAD_DIR: ${{ secrets.RCLONE_UPLOAD_DIR }}
 
     steps:
       - name: Checkout launcher
@@ -86,6 +81,23 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Load DeadZone secrets
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Import project secrets
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh frameworkpatcher
 
       - name: Resolve build mode
         id: mode
@@ -199,14 +211,10 @@ jobs:
       - name: Live — prepare Framework
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh preparing in_progress 0 "Preparing FrameworkPatcher request." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing FrameworkPatcher request." || true
 
       - name: Validate build contract
         shell: bash
-        env:
-          FRAMEWORK_ENGINE_REPOSITORY: ${{ secrets.FRAMEWORK_ENGINE_REPOSITORY }}
-          FRAMEWORK_MODULE_REPOSITORY: ${{ secrets.FRAMEWORK_MODULE_REPOSITORY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           set -Eeuo pipefail
           for key in FRAMEWORK_ENGINE_REPOSITORY FRAMEWORK_MODULE_REPOSITORY PRIVATE_REPO_TOKEN RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME; do
@@ -261,13 +269,13 @@ jobs:
       - name: Live — load Framework engine
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh loading_engine in_progress 1 "Loading FrameworkPatcher engine and module template." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading FrameworkPatcher engine and module template." || true
 
       - name: Load FrameworkPatcher engine
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ secrets.FRAMEWORK_ENGINE_REPOSITORY }}
-          token: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          repository: ${{ steps.central.outputs.engine_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
           path: engine
           ref: main
           fetch-depth: 1
@@ -276,8 +284,8 @@ jobs:
       - name: Load module template dependency
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ secrets.FRAMEWORK_MODULE_REPOSITORY }}
-          token: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          repository: ${{ steps.central.outputs.framework_module_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
           path: module-template
           ref: main
           fetch-depth: 1
@@ -286,7 +294,7 @@ jobs:
       - name: Live — prepare Framework tools
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh installing_tools in_progress 2 "Preparing Framework patch tools." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing Framework patch tools." || true
 
       - name: Prepare FrameworkPatcher environment
         shell: bash
@@ -306,7 +314,7 @@ jobs:
       - name: Live — apply Framework patches
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh building in_progress 3 "Loading JAR inputs and applying selected Framework patches." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Loading JAR inputs and applying selected Framework patches." || true
 
       - name: Download required JAR inputs
         working-directory: engine
@@ -385,7 +393,7 @@ jobs:
       - name: Live — package Framework module
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh packaging in_progress 4 "Verifying patched JARs and assembling Framework module." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Verifying patched JARs and assembling Framework module." || true
 
       - name: Verify and upload FrameworkPatcher module
         working-directory: engine
@@ -403,7 +411,7 @@ jobs:
           PY
           source artifact.env
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" preparing_upload in_progress 5 "Verifying Framework module before private delivery." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying Framework module before private delivery." || true
           fi
           config="$RUNNER_TEMP/deadzone-framework-rclone.conf"
           umask 077
@@ -412,7 +420,7 @@ jobs:
           base_dir="${RCLONE_UPLOAD_DIR:-module}"; base_dir="${base_dir#/}"; base_dir="${base_dir%/}"
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
             remote="${RCLONE_REMOTE_NAME}:${base_dir}/frameworkpatcher/${BUILDER_SLUG}_${BUILDER_ID}/${REQUEST_ID}/Android${ANDROID_VERSION}/${DEVICE_NAME}/${ARTIFACT}"
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" uploading in_progress 6 "Uploading verified Framework module to DeadZone Cloud." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading verified Framework module to DeadZone Cloud." || true
           else
             remote="${RCLONE_REMOTE_NAME}:${base_dir}/frameworkpatcher/direct/${GITHUB_ACTOR}/${GITHUB_RUN_ID}/Android${ANDROID_VERSION}/${DEVICE_NAME}/${ARTIFACT}"
           fi
@@ -430,7 +438,7 @@ jobs:
       - name: Live — finalize Framework result
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh finalizing in_progress 7 "Final Framework result verification." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final Framework result verification." || true
 
       - name: Create result contract
         shell: bash
@@ -454,12 +462,12 @@ jobs:
       - name: Live — Framework verified
         if: success() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh finalizing success 8 "FrameworkPatcher completed." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "FrameworkPatcher completed." || true
 
       - name: Live — Framework failed
         if: failure() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "FrameworkPatcher stopped safely." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "FrameworkPatcher stopped safely." || true
 
       - name: Upload private diagnostics
         if: failure()
