@@ -75,7 +75,6 @@ jobs:
                   'python3 "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/send_telemetry.py"',
               )
 
-              # Current private engines live under mohammedmezo99.
               text = text.replace("hypermezo4-create/DeadZone_GamingPlus", "mohammedmezo99/DeadZone_GamingPlus")
               text = text.replace("hypermezo4-create/DeadZone_Legend", "mohammedmezo99/DeadZone_Legend")
               text = text.replace("hypermezo4-create/DeadZone_Ninja", "mohammedmezo99/DeadZone_Ninja")
@@ -96,7 +95,6 @@ jobs:
 
               path.write_text(text, encoding="utf-8")
 
-          # Delete every non-canonical workflow from the working tree.
           for path in workflow_dir.glob("*"):
               if path.is_file() and path.name not in keep:
                   path.unlink()
@@ -146,3 +144,5 @@ jobs:
           fi
           git commit -m "cleanup: keep public launcher workflows only"
           git push origin HEAD:main
+
+# trigger-v2
