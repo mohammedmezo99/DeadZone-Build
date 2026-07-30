@@ -48,16 +48,9 @@ jobs:
     env:
       CONTROL_BOT_CONTRACT_URL: https://deadzone-mezo-v3-20260726.fly.dev/contract/resolve
       CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
-      BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-      RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
-      RCLONE_REMOTE_NAME: ${{ secrets.RCLONE_REMOTE_NAME }}
-      RCLONE_UPLOAD_DIR: ${{ secrets.RCLONE_UPLOAD_DIR }}
-      RCLONE_PUBLIC_LINK_BASE: ${{ secrets.RCLONE_PUBLIC_LINK_BASE }}
       DEADZONE_PROJECT: port
 
     steps:
-      # The build-space action mounts the combined LVM on GITHUB_WORKSPACE.
-      # It must run before checkout so it cannot hide/delete launcher files.
       - name: Maximize hosted runner space
         uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
         with:
@@ -73,6 +66,23 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+
+      - name: Load DeadZone secrets
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Import project secrets
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh port
 
       - name: Resolve build mode and inputs
         id: mode
@@ -181,17 +191,14 @@ jobs:
       - name: Live — prepare Port
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh preparing in_progress 0 "Preparing the DeadZone Port dual-ROM pipeline." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing the DeadZone Port dual-ROM pipeline." || true
 
       - name: Resolve private Port engine access
         id: engine_auth
         shell: bash
-        env:
-          RAW_PORT_ENGINE_REPOSITORY: ${{ secrets.PORT_ENGINE_REPOSITORY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          GH_TOKEN_FALLBACK: ${{ secrets.GH_TOKEN }}
         run: |
           set -Eeuo pipefail
+          RAW_PORT_ENGINE_REPOSITORY="${RAW_PORT_ENGINE_REPOSITORY:-${PORT_ENGINE_REPOSITORY:-}}"
           for key in RAW_PORT_ENGINE_REPOSITORY RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
             [[ -n "${!key:-}" ]] || { echo "Missing required configuration: $key" >&2; exit 1; }
           done
@@ -225,7 +232,7 @@ jobs:
 
           if can_read_engine "$PRIVATE_REPO_TOKEN"; then
             token_source=private
-          elif can_read_engine "$GH_TOKEN_FALLBACK"; then
+          elif can_read_engine "${GH_TOKEN_FALLBACK:-}"; then
             token_source=gh
           else
             echo "Configured private-repository credentials cannot read the Port engine main branch" >&2
@@ -241,14 +248,14 @@ jobs:
       - name: Live — load Port engine
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh loading_engine in_progress 1 "Loading the DeadZone Port engine." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading the DeadZone Port engine." || true
 
       - name: Checkout private DeadZone Port engine
         if: steps.engine_auth.outputs.token_source == 'private'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.engine_auth.outputs.repository }}
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
           ref: main
           path: engine
           fetch-depth: 1
@@ -260,7 +267,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.engine_auth.outputs.repository }}
-          token: ${{ secrets.GH_TOKEN }}
+          token: ${{ env.GH_TOKEN_FALLBACK }}
           ref: main
           path: engine
           fetch-depth: 1
@@ -288,7 +295,7 @@ jobs:
       - name: Live — prepare Port toolchain
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh installing_tools in_progress 2 "Preparing the Port extraction, patching and Super toolchain." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing the Port extraction, patching and Super toolchain." || true
 
       - name: Install Port dependencies
         working-directory: engine
@@ -305,7 +312,7 @@ jobs:
       - name: Live — build Port ROM
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh building in_progress 3 "Merging Stock and donor ROMs and applying DeadZone Port modifications." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Merging Stock and donor ROMs and applying DeadZone Port modifications." || true
 
       - name: Build DeadZone Port
         working-directory: engine
@@ -337,7 +344,7 @@ jobs:
       - name: Live — package Port ROM
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh packaging in_progress 4 "Repacking Port partitions and validating the generated Super image." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Repacking Port partitions and validating the generated Super image." || true
 
       - name: Package DeadZone Port
         working-directory: engine
@@ -351,12 +358,12 @@ jobs:
       - name: Live — verify Port package
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh preparing_upload in_progress 5 "Verifying the Port package before private delivery." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying the Port package before private delivery." || true
 
       - name: Live — deliver Port ROM
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh uploading in_progress 6 "Uploading the verified DeadZone Port package to DeadZone Cloud." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading the verified DeadZone Port package to DeadZone Cloud." || true
 
       - name: Upload and verify private delivery
         working-directory: engine
@@ -401,7 +408,7 @@ jobs:
       - name: Live — finalize Port
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh finalizing in_progress 7 "Final integrity verification for DeadZone Port." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final integrity verification for DeadZone Port." || true
 
       - name: Create verified DeadZone result contract
         working-directory: engine
@@ -454,12 +461,12 @@ jobs:
       - name: Live — Port verified
         if: success() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh finalizing success 8 "DeadZone Port completed." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "DeadZone Port completed." || true
 
       - name: Live — Port failed
         if: failure() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Port stopped safely." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Port stopped safely." || true
 
       - name: Expose verified result
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
