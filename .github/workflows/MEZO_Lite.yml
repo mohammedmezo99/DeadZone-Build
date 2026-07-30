@@ -14,7 +14,7 @@ on:
         required: false
         type: string
       builder_label:
-        description: "Optional builder label for manual build."
+        description: "Optional builder label for manual GitHub build."
         required: false
         type: string
       language:
@@ -49,20 +49,6 @@ jobs:
     env:
       CONTROL_BOT_CONTRACT_URL: https://deadzone-mezo-v3-20260726.fly.dev/contract/resolve
       CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
-      BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      MEZO_PRIVATE_CHAT_ID: ${{ secrets.MEZO_PRIVATE_CHAT_ID }}
-      TELEGRAM_RELEASE_GROUP_ID: ${{ secrets.TELEGRAM_RELEASE_GROUP_ID }}
-      MEZO_CONTACT_LINK: ${{ secrets.MEZO_CONTACT_LINK }}
-      UPDATES_GROUP_LINK: ${{ secrets.UPDATES_GROUP_LINK }}
-      SCREENSHOTS_GROUP_LINK: ${{ secrets.SCREENSHOTS_GROUP_LINK }}
-      CHAT_GROUP_LINK: ${{ secrets.CHAT_GROUP_LINK }}
-      CHANGELOG_LINK: ${{ secrets.CHANGELOG_LINK }}
-      SCREENSHOTS_POST_LINK: ${{ secrets.SCREENSHOTS_POST_LINK }}
-      RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
-      RCLONE_REMOTE_NAME: ${{ secrets.RCLONE_REMOTE_NAME }}
-      RCLONE_UPLOAD_DIR: ${{ secrets.RCLONE_UPLOAD_DIR }}
-      RCLONE_PUBLIC_LINK_BASE: ${{ secrets.RCLONE_PUBLIC_LINK_BASE }}
 
     steps:
       - name: Maximize build space
@@ -80,6 +66,23 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Load DeadZone secrets
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Import project secrets
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh lite
 
       - name: Resolve build mode
         id: mode
@@ -162,17 +165,14 @@ jobs:
       - name: Live — prepare Lite
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh preparing in_progress 0 "Preparing DeadZone Lite." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing DeadZone Lite." || true
 
       - name: Validate private source configuration
         shell: bash
-        env:
-          LITE_ENGINE_REPOSITORY: ${{ secrets.LITE_ENGINE_REPOSITORY }}
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: |
           set -Eeuo pipefail
-          [[ -n "$LITE_ENGINE_REPOSITORY" ]] || { echo "Missing LITE_ENGINE_REPOSITORY" >&2; exit 1; }
-          [[ -n "$PRIVATE_REPO_TOKEN" ]] || { echo "Missing private repository token" >&2; exit 1; }
+          [[ -n "${LITE_ENGINE_REPOSITORY:-}" ]] || { echo "Missing LITE_ENGINE_REPOSITORY" >&2; exit 1; }
+          [[ -n "${PRIVATE_REPO_TOKEN:-}" ]] || { echo "Missing private repository token" >&2; exit 1; }
           for key in RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
             [[ -n "${!key:-}" ]] || { echo "Missing $key" >&2; exit 1; }
           done
@@ -180,13 +180,13 @@ jobs:
       - name: Live — load Lite engine
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh loading_engine in_progress 1 "Loading DeadZone Lite." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading DeadZone Lite." || true
 
       - name: Load DeadZone Lite engine
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: ${{ secrets.LITE_ENGINE_REPOSITORY }}
-          token: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          repository: ${{ steps.central.outputs.engine_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
           path: engine
           ref: main
           fetch-depth: 1
@@ -196,7 +196,7 @@ jobs:
       - name: Live — prepare Lite tools
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh installing_tools in_progress 2 "Preparing Lite tools." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing Lite tools." || true
 
       - name: Prepare Lite environment
         working-directory: engine
@@ -231,19 +231,19 @@ jobs:
           export INPUT_URL="$rom"
 
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" building in_progress 3 "Building DeadZone Lite." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Building DeadZone Lite." || true
           fi
           sudo -E env "PATH=$PATH" "HOME=$HOME" "GITHUB_ENV=$GITHUB_ENV" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" bash build.sh "$rom" 2>&1 | tee build_action.log
 
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" packaging in_progress 4 "Packaging DeadZone Lite." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging DeadZone Lite." || true
           else
             python3 notify.py pack DeadZone_Lite "$rom" mezo-lite "$BUILDER_NAME" "" || true
           fi
           sudo -E env "PATH=$PATH" "HOME=$HOME" "GITHUB_ENV=$GITHUB_ENV" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" bash packROM.sh 2>&1 | tee pack_action.log
 
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" preparing_upload in_progress 5 "Preparing Lite delivery." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Preparing Lite delivery." || true
           fi
           base_dir="${RCLONE_UPLOAD_DIR%/}"
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
@@ -254,14 +254,14 @@ jobs:
           sudo -E env "PATH=$PATH" "HOME=$HOME" "GITHUB_ENV=$GITHUB_ENV" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" bash uploadROM.sh setup
 
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Lite." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Lite." || true
           else
             python3 notify.py upload DeadZone_Lite "$rom" mezo-lite "$BUILDER_NAME" "" || true
           fi
           sudo -E env "PATH=$PATH" "HOME=$HOME" "GITHUB_ENV=$GITHUB_ENV" "GITHUB_WORKSPACE=$GITHUB_WORKSPACE" bash uploadROM.sh 2>&1 | tee upload_action.log
 
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
-            bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" finalizing in_progress 7 "Final verification." || true
+            bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final verification." || true
           fi
 
       - name: Create result contract
@@ -310,12 +310,12 @@ jobs:
       - name: Live — Lite verified
         if: success() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh finalizing success 8 "DeadZone Lite completed." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "DeadZone Lite completed." || true
 
       - name: Live — Lite failed
         if: failure() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
-        run: bash scripts/emit_stage.sh "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Lite stopped safely." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Lite stopped safely." || true
 
       - name: Manual — Lite verified
         if: success() && steps.mode.outputs.mode == 'manual'
