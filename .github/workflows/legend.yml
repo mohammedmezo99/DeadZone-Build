@@ -26,11 +26,6 @@ jobs:
       REQUEST_ID: ${{ inputs.request_id }}
       CONTROL_BOT_CONTRACT_URL: https://deadzone-mezo-v3-20260726.fly.dev/contract/resolve
       CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
-      BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-      RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
-      RCLONE_REMOTE_NAME: ${{ secrets.RCLONE_REMOTE_NAME }}
-      RCLONE_UPLOAD_DIR: ${{ secrets.RCLONE_UPLOAD_DIR }}
-      RCLONE_PUBLIC_LINK_BASE: ${{ secrets.RCLONE_PUBLIC_LINK_BASE }}
       DEADZONE_CONTROLLED_BUILD: "1"
 
     steps:
@@ -51,6 +46,23 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+
+      - name: Load DeadZone secrets
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Import project secrets
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh legend
 
       - name: "🔐 Resolve private build request"
         shell: bash
@@ -101,13 +113,13 @@ jobs:
 
       - name: "📡 Preparing Legend"
         continue-on-error: true
-        run: bash scripts/emit_stage.sh preparing in_progress 0 "Preparing DeadZone Legend." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing DeadZone Legend." || true
 
       - name: "🥇 Load Legend engine"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: hypermezo4-create/DeadZone_Legend
-          token: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          repository: ${{ steps.central.outputs.engine_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
           ref: main
           path: engine
           fetch-depth: 1
@@ -125,7 +137,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" installing_tools in_progress 2 "Preparing Legend toolchain." || true
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing Legend toolchain." || true
           python3 -m venv .venv
           . .venv/bin/activate
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
@@ -144,14 +156,14 @@ jobs:
           export BUILDER_NAME="$(printf '%s' "$BUILDER_NAME_B64" | base64 --decode)"
           export INPUT_URL="$rom"
 
-          bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" building in_progress 3 "Building DeadZone Legend." || true
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Building DeadZone Legend." || true
           env DEADZONE_CONTROLLED_BUILD=1 BUILDER_ID="$BUILDER_ID" BUILDER_SLUG="$BUILDER_SLUG" DEADZONE_LANGUAGE="$DEADZONE_LANGUAGE" TELEGRAM_MSG_CHAT_ID="$TELEGRAM_MSG_CHAT_ID" TELEGRAM_MSG_ID="$TELEGRAM_MSG_ID" bash build.sh "$rom" 2>&1 | tee build_action.log
 
-          bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" packaging in_progress 4 "Packaging DeadZone Legend." || true
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging DeadZone Legend." || true
           bash packROM.sh 2>&1 | tee pack_action.log
           [[ -s build/baserom/images/super.img ]] || { echo "super.img is missing after packaging" >&2; exit 1; }
 
-          bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" preparing_upload in_progress 5 "Preparing Legend delivery." || true
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Preparing Legend delivery." || true
           bash uploadROM.sh setup 2>&1 | tee setup_upload_action.log
           codename="$(cat bin/runtime/info/device_f.txt 2>/dev/null || cat bin/runtime/info/device_code.txt)"
           codename="$(printf '%s' "$codename" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9._-')"
@@ -159,9 +171,9 @@ jobs:
           base_dir="${RCLONE_UPLOAD_DIR%/}"
           export RCLONE_UPLOAD_DIR="${base_dir}/legend/${codename}"
 
-          bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Legend." || true
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Legend." || true
           env DEADZONE_CONTROLLED_BUILD=0 RCLONE_UPLOAD_DIR="$RCLONE_UPLOAD_DIR" bash uploadROM.sh 2>&1 | tee upload_action.log
-          bash "$GITHUB_WORKSPACE/scripts/emit_stage.sh" finalizing in_progress 7 "Final verification for DeadZone Legend." || true
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final verification for DeadZone Legend." || true
 
       - name: "✅ Create Legend release contract"
         working-directory: engine
@@ -221,12 +233,12 @@ jobs:
       - name: "✅ Legend completed"
         if: success()
         continue-on-error: true
-        run: bash scripts/emit_stage.sh finalizing success 8 "DeadZone Legend completed." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "DeadZone Legend completed." || true
 
       - name: "❌ Legend failed"
         if: failure()
         continue-on-error: true
-        run: bash scripts/emit_stage.sh "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Legend stopped safely." || true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Legend stopped safely." || true
 
       - name: "🧾 Upload diagnostics"
         if: failure()
