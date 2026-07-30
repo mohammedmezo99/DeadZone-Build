@@ -29,9 +29,6 @@ jobs:
       DEADZONE_CONTROLLED_BUILD: "1"
 
     steps:
-      # Keep the runner layout simple like Lite: reclaim the large preinstalled
-      # toolchains, but do not build a second LVM from / and /mnt when both live
-      # on the same hosted-runner filesystem.
       - name: Prepare hosted runner disk
         shell: bash
         run: |
@@ -54,6 +51,23 @@ jobs:
           persist-credentials: false
           fetch-depth: 1
 
+      - name: Load DeadZone secrets
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Import project secrets
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh gamingplus
+
       - name: Validate public request ID
         shell: bash
         run: |
@@ -66,14 +80,10 @@ jobs:
 
       - name: Telemetry — prepare GamingPlus
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh preparing in_progress 0 "Preparing the GamingPlus performance build profile."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing the GamingPlus performance build profile."
 
       - name: Resolve private request contract
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
         run: |
           set -Eeuo pipefail
           [[ -n "${BUILD_PROGRESS_SECRET:-}" ]] || { echo "Missing BUILD_PROGRESS_SECRET" >&2; exit 1; }
@@ -131,11 +141,6 @@ jobs:
 
       - name: Validate private engine configuration
         shell: bash
-        env:
-          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
-          RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
-          RCLONE_REMOTE_NAME: ${{ secrets.RCLONE_REMOTE_NAME }}
-          RCLONE_UPLOAD_DIR: ${{ secrets.RCLONE_UPLOAD_DIR }}
         run: |
           set -Eeuo pipefail
           for key in PRIVATE_REPO_TOKEN RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
@@ -171,15 +176,13 @@ jobs:
 
       - name: Telemetry — load GamingPlus engine
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh loading_engine in_progress 1 "Loading the private GamingPlus performance engine."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading the private GamingPlus performance engine."
 
       - name: Checkout private GamingPlus engine
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          repository: hypermezo4-create/DeadZone_GamingPlus
-          token: ${{ secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          repository: ${{ steps.central.outputs.engine_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
           ref: main
           path: toolbuild
           fetch-depth: 1
@@ -194,9 +197,7 @@ jobs:
 
       - name: Telemetry — prepare GamingPlus tools
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh installing_tools in_progress 2 "Preparing the GamingPlus build and optimization toolchain."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing the GamingPlus build and optimization toolchain."
 
       - name: Install engine dependencies
         working-directory: toolbuild
@@ -210,9 +211,7 @@ jobs:
 
       - name: Telemetry — build GamingPlus
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh building in_progress 3 "Applying GamingPlus performance and gaming modifications."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Applying GamingPlus performance and gaming modifications."
 
       - name: Build ROM
         working-directory: toolbuild
@@ -226,9 +225,7 @@ jobs:
 
       - name: Telemetry — package GamingPlus
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh packaging in_progress 4 "Packaging the GamingPlus ROM and validating the generated super image."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging the GamingPlus ROM and validating the generated super image."
 
       - name: Pack ROM
         working-directory: toolbuild
@@ -240,9 +237,7 @@ jobs:
 
       - name: Telemetry — verify GamingPlus package
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh preparing_upload in_progress 5 "Verifying the GamingPlus package before delivery."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying the GamingPlus package before delivery."
 
       - name: Verify output metadata
         working-directory: toolbuild
@@ -258,17 +253,11 @@ jobs:
 
       - name: Telemetry — deliver GamingPlus
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh uploading in_progress 6 "Delivering the verified GamingPlus package to DeadZone Cloud."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Delivering the verified GamingPlus package to DeadZone Cloud."
 
       - name: Upload and verify private delivery
         working-directory: toolbuild
         shell: bash
-        env:
-          RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
-          RCLONE_REMOTE_NAME: ${{ secrets.RCLONE_REMOTE_NAME }}
-          RCLONE_UPLOAD_DIR: ${{ secrets.RCLONE_UPLOAD_DIR }}
         run: |
           set -Eeuo pipefail
           base_dir="${RCLONE_UPLOAD_DIR%/}"
@@ -278,9 +267,7 @@ jobs:
 
       - name: Telemetry — finalize GamingPlus
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh finalizing in_progress 7 "Final integrity verification for GamingPlus."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final integrity verification for GamingPlus."
 
       - name: Create verified DeadZone result contract
         working-directory: toolbuild
@@ -348,10 +335,8 @@ jobs:
       - name: Telemetry — GamingPlus verified
         if: success()
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
         run: |
-          python3 scripts/send_telemetry.py \
+          python3 "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/send_telemetry.py" \
             --request-id "$REQUEST_ID" --stage-key finalizing --stage-state success \
             --completed-stages 8 --total-stages 8 \
             --build-started-at "$BUILD_STARTED_AT" --stage-started-at "${DZ_STAGE_STARTED_AT:-}" \
@@ -360,16 +345,12 @@ jobs:
       - name: Telemetry — GamingPlus failed
         if: failure()
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "GamingPlus stopped safely after a failed build or verification step."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "GamingPlus stopped safely after a failed build or verification step."
 
       - name: Telemetry — GamingPlus cancelled
         if: cancelled()
         shell: bash
-        env:
-          BUILD_PROGRESS_SECRET: ${{ secrets.BUILD_PROGRESS_SECRET }}
-        run: bash scripts/emit_stage.sh "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "GamingPlus was cancelled safely."
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "GamingPlus was cancelled safely."
 
       - name: Upload diagnostics on failure
         if: failure()
