@@ -1,6 +1,6 @@
-name: "🔥 DeadZone Lite"
+name: "✨ DeadZone Lite"
 
-run-name: "DeadZone Lite • ${{ inputs.request_id || github.actor }}"
+run-name: "✨ DeadZone Lite • ${{ inputs.request_id || github.actor }}"
 
 on:
   workflow_dispatch:
@@ -45,6 +45,7 @@ concurrency:
 
 jobs:
   build:
+    name: "✨ Build DeadZone Lite"
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -52,7 +53,7 @@ jobs:
       CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
 
     steps:
-      - name: Maximize build space
+      - name: "⚡ Maximize Lite build space"
         uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
         with:
           swap-size-mb: 1024
@@ -62,13 +63,13 @@ jobs:
           remove-haskell: "true"
           remove-docker-images: "true"
 
-      - name: Checkout launcher
+      - name: "📥 Checkout DeadZone launcher"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Load DeadZone secrets
+      - name: "🔐 Load DeadZone secrets"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: mohammedmezo99/DeadZone-Secrets
@@ -78,14 +79,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Import project secrets
+      - name: "🔑 Import Lite runtime"
         id: central
         shell: bash
         env:
           DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: bash .deadzone-secrets/load-build.sh lite
 
-      - name: Resolve build mode
+      - name: "🔐 Resolve Lite build mode"
         id: mode
         shell: bash
         env:
@@ -163,12 +164,12 @@ jobs:
           fi
           echo "BUILD_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
-      - name: Live — prepare Lite
+      - name: "📡 Prepare DeadZone Lite"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing DeadZone Lite." || true
 
-      - name: Validate private source configuration
+      - name: "🛡️ Validate Lite runtime"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -178,12 +179,12 @@ jobs:
             [[ -n "${!key:-}" ]] || { echo "Missing $key" >&2; exit 1; }
           done
 
-      - name: Live — load Lite engine
+      - name: "✨ Load Lite engine"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading DeadZone Lite." || true
 
-      - name: Load DeadZone Lite engine
+      - name: "📥 Checkout private Lite engine"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.central.outputs.engine_repository }}
@@ -194,12 +195,12 @@ jobs:
           lfs: true
           persist-credentials: false
 
-      - name: Live — prepare Lite tools
+      - name: "🧰 Prepare Lite tools"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing Lite tools." || true
 
-      - name: Prepare Lite environment
+      - name: "⚙️ Prepare Lite environment"
         working-directory: engine
         shell: bash
         run: |
@@ -222,7 +223,7 @@ jobs:
           chmod +x bin/tool/Linux/x86_64/* 2>/dev/null || true
           bash -n build.sh && bash -n packROM.sh && bash -n uploadROM.sh
 
-      - name: Build, pack and upload DeadZone Lite
+      - name: "🛠️ Build, package and upload DeadZone Lite"
         working-directory: engine
         shell: bash
         run: |
@@ -265,7 +266,7 @@ jobs:
             bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final verification." || true
           fi
 
-      - name: Create result contract
+      - name: "✅ Create Lite result contract"
         working-directory: engine
         shell: bash
         run: |
@@ -308,35 +309,40 @@ jobs:
           Path("../deadzone-result.json").write_text(json.dumps(result, sort_keys=True, indent=2), encoding="utf-8")
           PY
 
-      - name: Live — Lite verified
+      - name: "✅ Lite completed"
         if: success() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "DeadZone Lite completed." || true
 
-      - name: Live — Lite failed
+      - name: "❌ Lite failed"
         if: failure() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Lite stopped safely." || true
 
-      - name: Manual — Lite verified
+      - name: "🚫 Lite cancelled"
+        if: cancelled() && steps.mode.outputs.mode == 'bot'
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "DeadZone Lite was cancelled safely." || true
+
+      - name: "✅ Manual Lite verified"
         if: success() && steps.mode.outputs.mode == 'manual'
         working-directory: engine
         continue-on-error: true
         run: python3 notify.py success DeadZone_Lite "" mezo-lite "${BUILDER_NAME:-${GITHUB_ACTOR}}" ""
 
-      - name: Manual — Lite failed
+      - name: "❌ Manual Lite failed"
         if: failure() && steps.mode.outputs.mode == 'manual'
         working-directory: engine
         continue-on-error: true
         run: python3 notify.py fail DeadZone_Lite "" mezo-lite "${BUILDER_NAME:-${GITHUB_ACTOR}}" ""
 
-      - name: Publish manual release
+      - name: "🚀 Publish manual Lite release"
         if: success() && steps.mode.outputs.mode == 'manual' && inputs.publish_release == 'true'
         working-directory: engine
         continue-on-error: true
         run: python3 notify.py release success
 
-      - name: Expose verified result
+      - name: "📤 Expose Lite result"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: deadzone-result-${{ env.REQUEST_ID }}
@@ -344,7 +350,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Upload private diagnostics
+      - name: "🧾 Upload Lite diagnostics"
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -358,7 +364,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Remove temporary credentials
+      - name: "🧹 Cleanup Lite credentials"
         if: always()
         shell: bash
         run: rm -f -- engine/rclone.conf engine/bin/runtime/config/rclone.conf
