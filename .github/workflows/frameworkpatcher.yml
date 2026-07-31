@@ -1,6 +1,6 @@
 name: "🧩 DeadZone FrameworkPatcher"
 
-run-name: "FrameworkPatcher • ${{ inputs.request_id || github.actor }}"
+run-name: "🧩 FrameworkPatcher • ${{ inputs.request_id || github.actor }}"
 
 on:
   workflow_dispatch:
@@ -65,10 +65,12 @@ permissions:
 
 concurrency:
   group: deadzone-frameworkpatcher-build-queue
+  queue: max
   cancel-in-progress: false
 
 jobs:
   build:
+    name: "🧩 Build FrameworkPatcher"
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -76,13 +78,13 @@ jobs:
       CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
 
     steps:
-      - name: Checkout launcher
+      - name: "📥 Checkout DeadZone launcher"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Load DeadZone secrets
+      - name: "🔐 Load DeadZone secrets"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: mohammedmezo99/DeadZone-Secrets
@@ -92,14 +94,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Import project secrets
+      - name: "🔑 Import FrameworkPatcher runtime"
         id: central
         shell: bash
         env:
           DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: bash .deadzone-secrets/load-build.sh frameworkpatcher
 
-      - name: Resolve build mode
+      - name: "🔐 Resolve FrameworkPatcher build mode"
         id: mode
         shell: bash
         env:
@@ -125,6 +127,7 @@ jobs:
             python3 - <<'PY'
           import base64, hashlib, hmac, json, os, re, urllib.request
           from datetime import datetime, timezone
+
           secret = os.environ["BUILD_PROGRESS_SECRET"]
           request_id = os.environ["REQUEST_ID"]
           payload = {"schema_version":"1.0","request_id":request_id,"project":"frameworkpatcher","timestamp":datetime.now(timezone.utc).isoformat()}
@@ -138,6 +141,7 @@ jobs:
           if not hmac.compare_digest(expected, response_signature): raise SystemExit("Invalid control response signature")
           contract = json.loads(response_body)
           if contract.get("request_id") != request_id or contract.get("project") != "frameworkpatcher": raise SystemExit("Private contract mismatch")
+
           options = contract.get("options") or {}
           builder = contract.get("builder") or {}
           live = contract.get("live_message") or {}
@@ -208,12 +212,12 @@ jobs:
           echo "FRAMEWORK_CONTRACT_PATH=$contract_path" >> "$GITHUB_ENV"
           echo "BUILD_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
-      - name: Live — prepare Framework
+      - name: "📡 Prepare FrameworkPatcher"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing FrameworkPatcher request." || true
 
-      - name: Validate build contract
+      - name: "🛡️ Validate Framework contract"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -223,6 +227,7 @@ jobs:
           python3 - <<'PY'
           import json, os, re
           from urllib.parse import urlsplit
+
           path = os.environ["FRAMEWORK_CONTRACT_PATH"]
           config = json.load(open(path, encoding="utf-8"))
           android = str(config.get("android_version") or "")
@@ -266,12 +271,12 @@ jobs:
               out.write(f"BUILDER_ID={int(config.get('builder_id') or 0)}\nBUILDER_SLUG={str(config.get('builder_slug') or 'github')}\n")
           PY
 
-      - name: Live — load Framework engine
+      - name: "🧩 Load FrameworkPatcher engine"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading FrameworkPatcher engine and module template." || true
 
-      - name: Load FrameworkPatcher engine
+      - name: "📥 Checkout FrameworkPatcher engine"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.central.outputs.engine_repository }}
@@ -281,7 +286,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Load module template dependency
+      - name: "📦 Load Framework module template"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.central.outputs.framework_module_repository }}
@@ -291,12 +296,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Live — prepare Framework tools
+      - name: "🧰 Prepare Framework tools"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing Framework patch tools." || true
 
-      - name: Prepare FrameworkPatcher environment
+      - name: "⚙️ Prepare FrameworkPatcher environment"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -311,12 +316,12 @@ jobs:
           test -s engine/Version
           test -s engine/templates/framework-patcher-module/module.prop
 
-      - name: Live — apply Framework patches
+      - name: "🛠️ Apply Framework patches"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Loading JAR inputs and applying selected Framework patches." || true
 
-      - name: Download required JAR inputs
+      - name: "📥 Download required Framework JARs"
         working-directory: engine
         shell: bash
         env:
@@ -365,7 +370,7 @@ jobs:
           open(os.environ["CONTRACT_PATH"], "w", encoding="utf-8").write(json.dumps(config, separators=(",", ":")))
           PY
 
-      - name: Run FrameworkPatcher
+      - name: "🧩 Run FrameworkPatcher"
         working-directory: engine
         shell: bash
         env:
@@ -390,12 +395,12 @@ jobs:
           if code: raise SystemExit(code)
           PY
 
-      - name: Live — package Framework module
+      - name: "📦 Package Framework module"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Verifying patched JARs and assembling Framework module." || true
 
-      - name: Verify and upload FrameworkPatcher module
+      - name: "☁️ Verify and upload Framework module"
         working-directory: engine
         shell: bash
         run: |
@@ -407,7 +412,13 @@ jobs:
           artifact = pathlib.Path(outputs[0])
           if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.zip", artifact.name) or artifact.stat().st_size <= 0: raise SystemExit("Unsafe or empty FrameworkPatcher output")
           if not zipfile.is_zipfile(artifact): raise SystemExit("FrameworkPatcher output is not a valid ZIP")
-          pathlib.Path("artifact.env").write_text(f"ARTIFACT={artifact.name}\nSHA256={hashlib.sha256(artifact.read_bytes()).hexdigest()}\nSIZE={artifact.stat().st_size}\n", encoding="utf-8")
+          digest = hashlib.sha256()
+          with artifact.open("rb") as stream:
+              while True:
+                  chunk = stream.read(1024 * 1024)
+                  if not chunk: break
+                  digest.update(chunk)
+          pathlib.Path("artifact.env").write_text(f"ARTIFACT={artifact.name}\nSHA256={digest.hexdigest()}\nSIZE={artifact.stat().st_size}\n", encoding="utf-8")
           PY
           source artifact.env
           if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
@@ -435,23 +446,34 @@ jobs:
             echo "FRAMEWORK_LINK=$link"
           } >> "$GITHUB_ENV"
 
-      - name: Live — finalize Framework result
+      - name: "🔎 Finalize Framework result"
         if: steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final Framework result verification." || true
 
-      - name: Create result contract
+      - name: "✅ Create Framework result contract"
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
           import json, os
           from datetime import datetime, timezone
-          result = {"schema_version":"1.0","request_id":os.environ["REQUEST_ID"],"project":"frameworkpatcher","status":"success","provider":"google_drive","url":os.environ["FRAMEWORK_LINK"],"file_name":os.environ["FRAMEWORK_ARTIFACT"],"sha256":os.environ["FRAMEWORK_SHA256"].lower(),"size":int(os.environ["FRAMEWORK_SIZE"]),"completed_at":datetime.now(timezone.utc).isoformat()}
+          result = {
+              "schema_version":"1.0",
+              "request_id":os.environ["REQUEST_ID"],
+              "project":"frameworkpatcher",
+              "status":"success",
+              "provider":"google_drive",
+              "url":os.environ["FRAMEWORK_LINK"],
+              "file_name":os.environ["FRAMEWORK_ARTIFACT"],
+              "sha256":os.environ["FRAMEWORK_SHA256"].lower(),
+              "size":int(os.environ["FRAMEWORK_SIZE"]),
+              "completed_at":datetime.now(timezone.utc).isoformat(),
+          }
           open("deadzone-result.json", "w", encoding="utf-8").write(json.dumps(result, sort_keys=True, indent=2))
           PY
 
-      - name: Expose verified result
+      - name: "📤 Expose Framework result"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: deadzone-result-${{ env.REQUEST_ID }}
@@ -459,17 +481,22 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Live — Framework verified
+      - name: "✅ FrameworkPatcher completed"
         if: success() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "FrameworkPatcher completed." || true
 
-      - name: Live — Framework failed
+      - name: "❌ FrameworkPatcher failed"
         if: failure() && steps.mode.outputs.mode == 'bot'
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "FrameworkPatcher stopped safely." || true
 
-      - name: Upload private diagnostics
+      - name: "🚫 FrameworkPatcher cancelled"
+        if: cancelled() && steps.mode.outputs.mode == 'bot'
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "FrameworkPatcher was cancelled safely." || true
+
+      - name: "🧾 Upload Framework diagnostics"
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -478,7 +505,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Remove temporary credentials
+      - name: "🧹 Cleanup Framework credentials"
         if: always()
         shell: bash
         run: rm -f -- "$RUNNER_TEMP/deadzone-framework-rclone.conf" "$FRAMEWORK_CONTRACT_PATH"
