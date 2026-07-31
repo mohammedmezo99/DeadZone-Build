@@ -1,12 +1,12 @@
 name: "🎮 DeadZone GamingPlus"
 
-run-name: "DeadZone GamingPlus  ${{ inputs.request_id }}"
+run-name: "🎮 DeadZone GamingPlus • ${{ inputs.request_id }}"
 
 on:
   workflow_dispatch:
     inputs:
       request_id:
-        description: Opaque DeadZone control request ID
+        description: "DeadZone GamingPlus request ID"
         required: true
         type: string
 
@@ -14,12 +14,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: deadzone-gamingplus
+  group: deadzone-gamingplus-build-queue
+  queue: max
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build GamingPlus privately
+    name: "🎮 Build DeadZone GamingPlus"
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -29,7 +30,7 @@ jobs:
       DEADZONE_CONTROLLED_BUILD: "1"
 
     steps:
-      - name: Prepare hosted runner disk
+      - name: "⚡ Prepare GamingPlus runner space"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -45,13 +46,13 @@ jobs:
           echo "Disk after cleanup:"
           df -h / "$GITHUB_WORKSPACE" /mnt || true
 
-      - name: Checkout DeadZone launcher
+      - name: "📥 Checkout DeadZone launcher"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Load DeadZone secrets
+      - name: "🔐 Load DeadZone secrets"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: mohammedmezo99/DeadZone-Secrets
@@ -61,14 +62,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Import project secrets
+      - name: "🔑 Import GamingPlus runtime"
         id: central
         shell: bash
         env:
           DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: bash .deadzone-secrets/load-build.sh gamingplus
 
-      - name: Validate public request ID
+      - name: "🆔 Validate GamingPlus request"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -78,23 +79,17 @@ jobs:
           }
           echo "BUILD_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
-      - name: Telemetry — prepare GamingPlus
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing the GamingPlus performance build profile."
+      - name: "📡 Prepare DeadZone GamingPlus"
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing the GamingPlus performance build profile." || true
 
-      - name: Resolve private request contract
+      - name: "🔐 Resolve private GamingPlus request"
         shell: bash
         run: |
           set -Eeuo pipefail
           [[ -n "${BUILD_PROGRESS_SECRET:-}" ]] || { echo "Missing BUILD_PROGRESS_SECRET" >&2; exit 1; }
           python3 - <<'PY'
-          import base64
-          import hashlib
-          import hmac
-          import json
-          import os
-          import re
-          import urllib.request
+          import base64, hashlib, hmac, json, os, re, urllib.request
           from datetime import datetime, timezone
 
           secret = os.environ["BUILD_PROGRESS_SECRET"]
@@ -119,27 +114,40 @@ jobs:
           expected = hmac.new(secret.encode(), response_body, hashlib.sha256).hexdigest()
           if not hmac.compare_digest(expected, response_signature):
               raise SystemExit("Invalid control response signature")
+
           contract = json.loads(response_body)
           if contract.get("request_id") != request_id or contract.get("project") != "gamingplus":
               raise SystemExit("Private contract mismatch")
-          source_url = str(contract.get("source", {}).get("url") or "")
+
+          source_url = str((contract.get("source") or {}).get("url") or "")
           builder = contract.get("builder") or {}
+          live = contract.get("live_message") or {}
           builder_id = int(builder.get("telegram_user_id") or 0)
           builder_slug = str(builder.get("slug") or "")
           builder_name = str(builder.get("display_name") or builder.get("username") or builder_slug or "DeadZone Builder")
+          language = "ar" if str(contract.get("language") or "").lower() == "ar" else "en"
+          status_chat_id = int(live.get("chat_id") or 0)
+          status_message_id = int(live.get("message_id") or 0)
+
           if not source_url.startswith("https://"):
               raise SystemExit("GamingPlus source URL is missing")
           if builder_id <= 0 or not re.fullmatch(r"[a-z0-9_.-]{1,48}", builder_slug):
               raise SystemExit("Builder identity is invalid")
+          if status_chat_id == 0 or status_message_id <= 0:
+              raise SystemExit("GamingPlus live-message contract is missing")
+
           print(f"::add-mask::{source_url}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
               out.write("ROM_URL_B64=" + base64.b64encode(source_url.encode()).decode() + "\n")
-              out.write(f"BUILDER_ID={builder_id}\n")
-              out.write(f"BUILDER_SLUG={builder_slug}\n")
+              out.write(f"BUILDER_ID={builder_id}\nBUILDER_SLUG={builder_slug}\n")
               out.write("BUILDER_NAME_B64=" + base64.b64encode(builder_name.encode()).decode() + "\n")
+              out.write(f"DEADZONE_LANGUAGE={language}\n")
+              out.write(f"TELEGRAM_MSG_CHAT_ID={status_chat_id}\n")
+              out.write(f"TELEGRAM_MSG_ID={status_message_id}\n")
+              out.write("REQUEST_SOURCE=telegram\nDEADZONE_CONTROLLED_BUILD=1\n")
           PY
 
-      - name: Validate private engine configuration
+      - name: "🛡️ Validate GamingPlus runtime"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -147,7 +155,7 @@ jobs:
             [[ -n "${!key:-}" ]] || { echo "Missing required configuration: $key" >&2; exit 1; }
           done
 
-      - name: Gate available build disk
+      - name: "💾 Gate GamingPlus build disk"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -174,11 +182,11 @@ jobs:
             exit 1
           fi
 
-      - name: Telemetry — load GamingPlus engine
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading the private GamingPlus performance engine."
+      - name: "🎮 Load GamingPlus engine"
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading the private GamingPlus performance engine." || true
 
-      - name: Checkout private GamingPlus engine
+      - name: "📥 Checkout private GamingPlus engine"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.central.outputs.engine_repository }}
@@ -189,17 +197,17 @@ jobs:
           lfs: true
           persist-credentials: false
 
-      - name: Set up OpenJDK 17
+      - name: "☕ Prepare Java 17"
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Telemetry — prepare GamingPlus tools
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing the GamingPlus build and optimization toolchain."
+      - name: "🧰 Prepare GamingPlus tools"
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing the GamingPlus build and optimization toolchain." || true
 
-      - name: Install engine dependencies
+      - name: "⚙️ Install GamingPlus dependencies"
         working-directory: toolbuild
         shell: bash
         run: |
@@ -208,54 +216,44 @@ jobs:
           . .venv/bin/activate
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           bash bin/core/ci/setup.sh 2>&1 | tee -a build_action.log
+          find . -type f -name '*.sh' -exec chmod +x {} +
+          bash -n build.sh
+          bash -n packROM.sh
+          bash -n uploadROM.sh
 
-      - name: Telemetry — build GamingPlus
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Applying GamingPlus performance and gaming modifications."
-
-      - name: Build ROM
+      - name: "🛠️ Build DeadZone GamingPlus"
         working-directory: toolbuild
         shell: bash
         run: |
           set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Applying GamingPlus performance and gaming modifications." || true
           input_url="$(printf '%s' "$ROM_URL_B64" | base64 --decode)"
-          builder_name="$(printf '%s' "$BUILDER_NAME_B64" | base64 --decode)"
-          export BUILDER_NAME="$builder_name"
+          export BUILDER_NAME="$(printf '%s' "$BUILDER_NAME_B64" | base64 --decode)"
+          export INPUT_URL="$input_url"
           bash build.sh "$input_url" 2>&1 | tee -a build_action.log
 
-      - name: Telemetry — package GamingPlus
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging the GamingPlus ROM and validating the generated super image."
-
-      - name: Pack ROM
+      - name: "📦 Package DeadZone GamingPlus"
         working-directory: toolbuild
         shell: bash
         run: |
           set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging the GamingPlus ROM and validating the generated super image." || true
           bash packROM.sh 2>&1 | tee -a build_action.log
-          [[ -s build/baserom/images/super.img ]] || { echo "super.img is missing after packaging" >&2; exit 1; }
+          [[ -s build/baserom/images/super.img ]] || { echo "super.img is missing after GamingPlus packaging" >&2; exit 1; }
 
-      - name: Telemetry — verify GamingPlus package
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying the GamingPlus package before delivery."
-
-      - name: Verify output metadata
+      - name: "🔎 Verify GamingPlus package"
         working-directory: toolbuild
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [[ -s bin/runtime/info/output_zip.txt ]]; then
-            output="$(cat bin/runtime/info/output_zip.txt)"
-            if [[ -s "out/$output" ]]; then
-              echo "DEADZONE_ARTIFACT_SIZE=$(stat -c '%s' "out/$output")" >> "$GITHUB_ENV"
-            fi
-          fi
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying the GamingPlus package before delivery." || true
+          output="$(cat bin/runtime/info/output_zip.txt 2>/dev/null || cat bin/runtime/info/output_file.txt 2>/dev/null || true)"
+          output_path="$(cat bin/runtime/info/output_path.txt 2>/dev/null || true)"
+          artifact="${output_path:-out/$output}"
+          [[ -n "$output" && -s "$artifact" ]] || { echo "GamingPlus output archive is missing before upload" >&2; exit 1; }
+          echo "DEADZONE_ARTIFACT_SIZE=$(stat -c '%s' "$artifact")" >> "$GITHUB_ENV"
 
-      - name: Telemetry — deliver GamingPlus
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Delivering the verified GamingPlus package to DeadZone Cloud."
-
-      - name: Upload and verify private delivery
+      - name: "☁️ Upload DeadZone GamingPlus"
         working-directory: toolbuild
         shell: bash
         run: |
@@ -263,21 +261,17 @@ jobs:
           base_dir="${RCLONE_UPLOAD_DIR%/}"
           export RCLONE_UPLOAD_DIR="${base_dir}/gamingplus/${BUILDER_SLUG}_${BUILDER_ID}/${REQUEST_ID}"
           bash uploadROM.sh setup 2>&1 | tee -a build_action.log
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Delivering the verified GamingPlus package to DeadZone Cloud." || true
           bash uploadROM.sh 2>&1 | tee -a build_action.log
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final integrity verification for GamingPlus." || true
 
-      - name: Telemetry — finalize GamingPlus
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final integrity verification for GamingPlus."
-
-      - name: Create verified DeadZone result contract
+      - name: "✅ Create GamingPlus result contract"
         working-directory: toolbuild
         shell: bash
         run: |
           set -Eeuo pipefail
           python3 - <<'PY'
-          import hashlib
-          import json
-          import os
+          import hashlib, json, os
           from datetime import datetime, timezone
           from pathlib import Path
           from urllib.parse import urlsplit
@@ -297,16 +291,26 @@ jobs:
                   raise SystemExit("GamingPlus did not expose delivery metadata")
               file_name = output_name.read_text(encoding="utf-8").strip()
               url = link_file.read_text(encoding="utf-8").strip()
-              artifact = Path("out") / file_name
+              output_path_file = Path("bin/runtime/info/output_path.txt")
+              artifact = Path(output_path_file.read_text(encoding="utf-8").strip()) if output_path_file.is_file() else Path("out") / file_name
               if not artifact.is_file():
                   raise SystemExit("GamingPlus output archive is missing")
-              sha256 = hashlib.sha256(artifact.read_bytes()).hexdigest()
+              digest = hashlib.sha256()
+              with artifact.open("rb") as stream:
+                  while True:
+                      chunk = stream.read(4 * 1024 * 1024)
+                      if not chunk:
+                          break
+                      digest.update(chunk)
+              sha256 = digest.hexdigest()
               size = artifact.stat().st_size
+
           parsed = urlsplit(url)
-          if parsed.scheme != "https" or parsed.hostname not in {"drive.google.com", "docs.google.com"}:
+          if parsed.scheme != "https" or (parsed.hostname or "").lower() not in {"drive.google.com", "docs.google.com"}:
               raise SystemExit("GamingPlus delivery link is invalid")
           if not file_name or len(sha256) != 64 or size <= 0:
               raise SystemExit("GamingPlus result metadata is incomplete")
+
           result = {
               "schema_version": "1.0",
               "request_id": request_id,
@@ -319,22 +323,22 @@ jobs:
               "size": size,
               "completed_at": datetime.now(timezone.utc).isoformat(),
           }
-          Path("../deadzone-result.json").write_text(json.dumps(result, sort_keys=True, indent=2), encoding="utf-8")
+          Path("../deadzone-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
               out.write(f"DEADZONE_ARTIFACT_SIZE={size}\n")
           PY
 
-      - name: Expose only the verified result contract
+      - name: "📤 Expose GamingPlus result"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: deadzone-result-${{ inputs.request_id }}
+          name: deadzone-result-${{ env.REQUEST_ID }}
           path: deadzone-result.json
           if-no-files-found: error
           retention-days: 1
 
-      - name: Telemetry — GamingPlus verified
+      - name: "✅ GamingPlus completed"
         if: success()
-        shell: bash
+        continue-on-error: true
         run: |
           python3 "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/send_telemetry.py" \
             --request-id "$REQUEST_ID" --stage-key finalizing --stage-state success \
@@ -342,26 +346,29 @@ jobs:
             --build-started-at "$BUILD_STARTED_AT" --stage-started-at "${DZ_STAGE_STARTED_AT:-}" \
             --artifact-size "${DEADZONE_ARTIFACT_SIZE:-}" --message "GamingPlus completed and passed final verification." || true
 
-      - name: Telemetry — GamingPlus failed
+      - name: "❌ GamingPlus failed"
         if: failure()
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "GamingPlus stopped safely after a failed build or verification step."
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "GamingPlus stopped safely after a failed build or verification step." || true
 
-      - name: Telemetry — GamingPlus cancelled
+      - name: "🚫 GamingPlus cancelled"
         if: cancelled()
-        shell: bash
-        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "GamingPlus was cancelled safely."
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "GamingPlus was cancelled safely." || true
 
-      - name: Upload diagnostics on failure
+      - name: "🧾 Upload GamingPlus diagnostics"
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: gamingplus-diagnostics-${{ inputs.request_id }}
-          path: toolbuild/build_action.log
+          name: gamingplus-diagnostics-${{ env.REQUEST_ID }}
+          path: |
+            toolbuild/build_action.log
+            toolbuild/bin/runtime/logs/
+            toolbuild/bin/runtime/reports/
           if-no-files-found: warn
           retention-days: 3
 
-      - name: Remove temporary credentials
+      - name: "🧹 Cleanup GamingPlus credentials"
         if: always()
         shell: bash
-        run: rm -f -- toolbuild/bin/runtime/config/rclone.conf
+        run: rm -f -- toolbuild/rclone.conf toolbuild/bin/runtime/config/rclone.conf
