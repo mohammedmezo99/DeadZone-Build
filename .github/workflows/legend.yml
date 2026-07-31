@@ -1,6 +1,6 @@
 name: "👑 DeadZone Legend"
 
-run-name: "DeadZone Legend  ${{ inputs.request_id }}"
+run-name: "👑 DeadZone Legend • ${{ inputs.request_id }}"
 
 on:
   workflow_dispatch:
@@ -14,12 +14,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: deadzone-legend
+  group: deadzone-legend-build-queue
+  queue: max
   cancel-in-progress: false
 
 jobs:
   build:
-    name: "👑 Build Legend"
+    name: "👑 Build DeadZone Legend"
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -29,7 +30,7 @@ jobs:
       DEADZONE_CONTROLLED_BUILD: "1"
 
     steps:
-      - name: "⚡ Maximize build space"
+      - name: "⚡ Maximize Legend build space"
         uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
         with:
           swap-size-mb: 1024
@@ -41,13 +42,13 @@ jobs:
           remove-codeql: "true"
           remove-docker-images: "true"
 
-      - name: "📥 Checkout launcher"
+      - name: "📥 Checkout DeadZone launcher"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
           fetch-depth: 1
 
-      - name: Load DeadZone secrets
+      - name: "🔐 Load DeadZone secrets"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: mohammedmezo99/DeadZone-Secrets
@@ -57,14 +58,14 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Import project secrets
+      - name: "🔑 Import Legend runtime"
         id: central
         shell: bash
         env:
           DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: bash .deadzone-secrets/load-build.sh legend
 
-      - name: "🔐 Resolve private build request"
+      - name: "🔐 Resolve private Legend request"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -90,6 +91,7 @@ jobs:
           contract = json.loads(response_body)
           if contract.get("request_id") != request_id or contract.get("project") != "legend":
               raise SystemExit("Legend contract mismatch")
+
           source_url = str((contract.get("source") or {}).get("url") or "")
           builder = contract.get("builder") or {}
           live = contract.get("live_message") or {}
@@ -97,25 +99,44 @@ jobs:
           builder_slug = str(builder.get("slug") or "")
           builder_name = str(builder.get("display_name") or builder.get("username") or builder_slug or "DeadZone Builder")
           language = "ar" if str(contract.get("language") or "").lower() == "ar" else "en"
+          status_chat_id = int(live.get("chat_id") or 0)
+          status_message_id = int(live.get("message_id") or 0)
+
           if not source_url.startswith("https://"):
               raise SystemExit("Legend source URL is invalid")
           if builder_id <= 0 or not re.fullmatch(r"[a-z0-9_.-]{1,48}", builder_slug):
               raise SystemExit("Builder identity is invalid")
+          if status_chat_id == 0 or status_message_id <= 0:
+              raise SystemExit("Legend live-message contract is missing")
+
           print(f"::add-mask::{source_url}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
               out.write("ROM_URL_B64=" + base64.b64encode(source_url.encode()).decode() + "\n")
               out.write(f"BUILDER_ID={builder_id}\nBUILDER_SLUG={builder_slug}\n")
               out.write("BUILDER_NAME_B64=" + base64.b64encode(builder_name.encode()).decode() + "\n")
               out.write(f"DEADZONE_LANGUAGE={language}\n")
-              out.write(f"TELEGRAM_MSG_CHAT_ID={int(live.get('chat_id') or 0)}\n")
-              out.write(f"TELEGRAM_MSG_ID={int(live.get('message_id') or 0)}\n")
+              out.write(f"TELEGRAM_MSG_CHAT_ID={status_chat_id}\n")
+              out.write(f"TELEGRAM_MSG_ID={status_message_id}\n")
+              out.write("REQUEST_SOURCE=telegram\nDEADZONE_CONTROLLED_BUILD=1\n")
           PY
 
-      - name: "📡 Preparing Legend"
+      - name: "📡 Prepare DeadZone Legend"
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing DeadZone Legend." || true
 
-      - name: "🥇 Load Legend engine"
+      - name: "🛡️ Validate Legend runtime"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for key in PRIVATE_REPO_TOKEN RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
+            [[ -n "${!key:-}" ]] || { echo "Missing required configuration: $key" >&2; exit 1; }
+          done
+
+      - name: "👑 Load Legend engine"
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading DeadZone Legend engine." || true
+
+      - name: "📥 Checkout private Legend engine"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ steps.central.outputs.engine_repository }}
@@ -126,7 +147,7 @@ jobs:
           lfs: true
           persist-credentials: false
 
-      - name: "☕ Java 17"
+      - name: "☕ Prepare Java 17"
         uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
         with:
           distribution: temurin
@@ -147,7 +168,7 @@ jobs:
           bash -n packROM.sh
           bash -n uploadROM.sh
 
-      - name: "🚀 Build, pack and upload Legend"
+      - name: "🛠️ Build DeadZone Legend"
         working-directory: engine
         shell: bash
         run: |
@@ -155,24 +176,46 @@ jobs:
           rom="$(printf '%s' "$ROM_URL_B64" | base64 --decode)"
           export BUILDER_NAME="$(printf '%s' "$BUILDER_NAME_B64" | base64 --decode)"
           export INPUT_URL="$rom"
-
           bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Building DeadZone Legend." || true
-          env DEADZONE_CONTROLLED_BUILD=1 BUILDER_ID="$BUILDER_ID" BUILDER_SLUG="$BUILDER_SLUG" DEADZONE_LANGUAGE="$DEADZONE_LANGUAGE" TELEGRAM_MSG_CHAT_ID="$TELEGRAM_MSG_CHAT_ID" TELEGRAM_MSG_ID="$TELEGRAM_MSG_ID" bash build.sh "$rom" 2>&1 | tee build_action.log
+          env \
+            DEADZONE_CONTROLLED_BUILD=1 \
+            BUILDER_ID="$BUILDER_ID" \
+            BUILDER_SLUG="$BUILDER_SLUG" \
+            DEADZONE_LANGUAGE="$DEADZONE_LANGUAGE" \
+            TELEGRAM_MSG_CHAT_ID="$TELEGRAM_MSG_CHAT_ID" \
+            TELEGRAM_MSG_ID="$TELEGRAM_MSG_ID" \
+            bash build.sh "$rom" 2>&1 | tee build_action.log
 
+      - name: "📦 Package DeadZone Legend"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging DeadZone Legend." || true
           bash packROM.sh 2>&1 | tee pack_action.log
-          [[ -s build/baserom/images/super.img ]] || { echo "super.img is missing after packaging" >&2; exit 1; }
+          [[ -s build/baserom/images/super.img ]] || { echo "super.img is missing after Legend packaging" >&2; exit 1; }
 
-          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Preparing Legend delivery." || true
-          bash uploadROM.sh setup 2>&1 | tee setup_upload_action.log
-          codename="$(cat bin/runtime/info/device_f.txt 2>/dev/null || cat bin/runtime/info/device_code.txt)"
-          codename="$(printf '%s' "$codename" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9._-')"
-          [[ -n "$codename" ]] || { echo "Invalid device codename" >&2; exit 1; }
+      - name: "🔎 Verify Legend package"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying Legend package before delivery." || true
+          output="$(cat bin/runtime/info/output_zip.txt 2>/dev/null || cat bin/runtime/info/output_file.txt 2>/dev/null || true)"
+          output_path="$(cat bin/runtime/info/output_path.txt 2>/dev/null || true)"
+          artifact="${output_path:-out/$output}"
+          [[ -n "$output" && -s "$artifact" ]] || { echo "Legend output archive is missing before upload" >&2; exit 1; }
+
+      - name: "☁️ Upload DeadZone Legend"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           base_dir="${RCLONE_UPLOAD_DIR%/}"
-          export RCLONE_UPLOAD_DIR="${base_dir}/legend/${codename}"
-
-          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Legend." || true
-          env DEADZONE_CONTROLLED_BUILD=0 RCLONE_UPLOAD_DIR="$RCLONE_UPLOAD_DIR" bash uploadROM.sh 2>&1 | tee upload_action.log
+          export RCLONE_UPLOAD_DIR="${base_dir}/legend/${BUILDER_SLUG}_${BUILDER_ID}/${REQUEST_ID}"
+          bash uploadROM.sh setup 2>&1 | tee setup_upload_action.log
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Legend to DeadZone Cloud." || true
+          bash uploadROM.sh 2>&1 | tee upload_action.log
           bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final verification for DeadZone Legend." || true
 
       - name: "✅ Create Legend release contract"
@@ -192,7 +235,8 @@ jobs:
                   path = info / name
                   if path.is_file():
                       value = path.read_text(encoding="utf-8", errors="replace").strip()
-                      if value: return value
+                      if value:
+                          return value
               return ""
 
           file_name = first("output_zip.txt", "output_file.txt")
@@ -204,28 +248,51 @@ jobs:
           android = first("androidver.txt", "android_version.txt")
           region_raw = first("region.txt", "device_type.txt")
           version = Path("Version").read_text(encoding="utf-8").strip()
-          if not artifact.is_file() or artifact.stat().st_size <= 0: raise SystemExit("Legend output archive is missing")
-          if artifact.name != file_name: raise SystemExit("Legend output metadata mismatch")
+
+          if not file_name or not artifact.is_file() or artifact.stat().st_size <= 0:
+              raise SystemExit("Legend output archive is missing")
+          if artifact.name != file_name:
+              raise SystemExit("Legend output metadata mismatch")
           parsed = urlsplit(url)
-          if parsed.scheme != "https" or (parsed.hostname or "").lower() not in {"drive.google.com", "docs.google.com"}: raise SystemExit("Legend Drive link is invalid")
-          if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,39}", codename): raise SystemExit("Legend codename is invalid")
+          if parsed.scheme != "https" or (parsed.hostname or "").lower() not in {"drive.google.com", "docs.google.com"}:
+              raise SystemExit("Legend Drive link is invalid")
+          if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,39}", codename):
+              raise SystemExit("Legend codename is invalid")
           with zipfile.ZipFile(artifact) as archive:
               bad = archive.testzip()
-          if bad is not None: raise SystemExit(f"Legend ZIP is corrupt: {bad}")
-          regions = {"china":"ChinaStable","global":"GlobalStable","eeaglobal":"EEAStable","europe":"EEAStable","inglobal":"IndiaStable","idglobal":"IndonesiaStable","ruglobal":"RussiaStable","twglobal":"TaiwanStable","trglobal":"TurkeyStable","jpglobal":"JapanStable"}
+          if bad is not None:
+              raise SystemExit(f"Legend ZIP is corrupt: {bad}")
+
+          regions = {
+              "china":"ChinaStable", "global":"GlobalStable", "eeaglobal":"EEAStable", "europe":"EEAStable",
+              "inglobal":"IndiaStable", "idglobal":"IndonesiaStable", "ruglobal":"RussiaStable",
+              "twglobal":"TaiwanStable", "trglobal":"TurkeyStable", "jpglobal":"JapanStable",
+          }
           result = {
-              "schema_version":"1.1","request_id":os.environ["REQUEST_ID"],"project":"legend","edition":"Legend",
-              "edition_version":("V" + version.lstrip("vV")),"codename":codename,"status":"success","provider":"google_drive",
-              "url":url,"file_name":file_name,"size":artifact.stat().st_size,"rom_version":rom_version,"android_version":android,
-              "region":regions.get(region_raw.lower(), region_raw),"integrity_verified":True,"completed_at":datetime.now(timezone.utc).isoformat(),
+              "schema_version":"1.1",
+              "request_id":os.environ["REQUEST_ID"],
+              "project":"legend",
+              "edition":"Legend",
+              "edition_version":"V" + version.lstrip("vV"),
+              "codename":codename,
+              "status":"success",
+              "provider":"google_drive",
+              "url":url,
+              "file_name":file_name,
+              "size":artifact.stat().st_size,
+              "rom_version":rom_version,
+              "android_version":android,
+              "region":regions.get(region_raw.lower(), region_raw),
+              "integrity_verified":True,
+              "completed_at":datetime.now(timezone.utc).isoformat(),
           }
           Path("../deadzone-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
           PY
 
-      - name: "📦 Expose Legend result"
+      - name: "📤 Expose Legend result"
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: deadzone-result-${{ inputs.request_id }}
+          name: deadzone-result-${{ env.REQUEST_ID }}
           path: deadzone-result.json
           if-no-files-found: error
           retention-days: 1
@@ -240,11 +307,16 @@ jobs:
         continue-on-error: true
         run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Legend stopped safely." || true
 
-      - name: "🧾 Upload diagnostics"
+      - name: "🚫 Legend cancelled"
+        if: cancelled()
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "DeadZone Legend was cancelled safely." || true
+
+      - name: "🧾 Upload Legend diagnostics"
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: legend-diagnostics-${{ inputs.request_id }}
+          name: legend-diagnostics-${{ env.REQUEST_ID }}
           path: |
             engine/setup_action.log
             engine/build_action.log
@@ -256,7 +328,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 3
 
-      - name: "🧹 Cleanup credentials"
+      - name: "🧹 Cleanup Legend credentials"
         if: always()
         shell: bash
         run: rm -f -- engine/rclone.conf engine/bin/runtime/config/rclone.conf
