@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v3
+  group: deadzone-build-machine-bootstrap-v4
   cancel-in-progress: true
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
           ref: main
           path: machine
           fetch-depth: 0
-          lfs: true
+          lfs: false
           persist-credentials: true
 
       - name: Checkout pinned legacy tool source
@@ -63,7 +63,7 @@ jobs:
           ref: 27e489cf077b8af2ab09cd45c68b8674e71471d6
           path: legacy
           fetch-depth: 1
-          lfs: true
+          lfs: false
           persist-credentials: false
 
       - name: Install standard Linux fallbacks
