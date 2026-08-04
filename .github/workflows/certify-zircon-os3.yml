@@ -1,0 +1,24 @@
+name: "Certify Zircon OS3"
+run-name: "Certify Zircon OS3  ${{ github.run_id }}"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/certify-zircon-os3.yml
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    uses: ./.github/workflows/machine-rom.yml
+    with:
+      project: lite
+      project_code: LT
+      edition_repository: mohammedmezo99/DeadZone_Lite
+      edition_ref: main
+      rom_link: https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS3.0.303.0.WNOCNXM/zircon-ota_full-OS3.0.303.0.WNOCNXM-user-16.0-09c35a83d6.zip
+      builder_label: DeadZone Machine Certification
+      language: ar
+    secrets: inherit
