@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v9
+  group: deadzone-build-machine-bootstrap-v10
   cancel-in-progress: true
 
 jobs:
@@ -78,7 +78,27 @@ jobs:
 
       - name: Assemble tools assets and Runtime
         shell: bash
-        run: bash machine/scripts/bootstrap_internal_tools.sh "$GITHUB_WORKSPACE/legacy"
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("machine/scripts/bootstrap_internal_tools.sh")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "python3 -m compileall -q tools/python\n",
+              "while IFS= read -r python_file; do\n"
+              "    PYTHONPYCACHEPREFIX=\"${TMPDIR:-/tmp}/deadzone-pyc\" python3 -m py_compile \"$python_file\"\n"
+              "done < <(find tools/python -type f -name '*.py' -print | sort)\n",
+          )
+          text = text.replace(
+              "    missing=\"$(ldd \"$binary\" 2>/dev/null | awk '/not found/{print $1}' | paste -sd, -)\"\n",
+              "    ldd_output=\"$(ldd \"$binary\" 2>&1 || true)\"\n"
+              "    missing=\"$(awk '/not found/{print $1}' <<<\"$ldd_output\" | paste -sd, -)\"\n",
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+          bash machine/scripts/bootstrap_internal_tools.sh "$GITHUB_WORKSPACE/legacy"
 
       - name: Commit complete Machine
         shell: bash
@@ -97,7 +117,7 @@ jobs:
             done
           fi
 
-          git add -A tools assets runtime/template .github/workflows
+          git add -A tools assets runtime/template .github/workflows scripts/bootstrap_internal_tools.sh
           [[ -f .gitattributes ]] && git add .gitattributes
           git commit -m 'Store complete toolchain and runtime assets inside Machine'
           git pull --rebase origin main
