@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v5
+  group: deadzone-build-machine-bootstrap-v6
   cancel-in-progress: true
 
 jobs:
@@ -73,9 +73,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           archive="$RUNNER_TEMP/deadzone-old-assets.zip"
-          extracted="$RUNNER_TEMP/deadzone-old-superconfig"
-          rm -rf "$extracted"
-          mkdir -p "$extracted"
+          members="$RUNNER_TEMP/deadzone-old-members.txt"
+          direct="$RUNNER_TEMP/superconfig-direct-members.txt"
+          parts="$RUNNER_TEMP/superconfig-parts-info.txt"
           curl --fail --location --show-error \
             --retry 5 --retry-all-errors \
             -H "Authorization: Bearer $MACHINE_TOKEN" \
@@ -83,24 +83,53 @@ jobs:
             -H 'X-GitHub-Api-Version: 2022-11-28' \
             "https://api.github.com/repos/mohammedmezo99/DeadZone_Lite_old/actions/artifacts/${LEGACY_ARTIFACT_ID}/zip" \
             --output "$archive"
-          unzip -Z1 "$archive" | grep -E '(^|/)SuperConfig/' > "$RUNNER_TEMP/superconfig-members.txt"
-          [[ -s "$RUNNER_TEMP/superconfig-members.txt" ]] || {
-            echo 'Verified legacy artifact contains no SuperConfig members' >&2
-            exit 1
-          }
-          while IFS= read -r member; do
-            unzip -q -o "$archive" "$member" -d "$extracted"
-          done < "$RUNNER_TEMP/superconfig-members.txt"
-          super_root="$(find "$extracted" -type d -name SuperConfig -print -quit)"
-          [[ -n "$super_root" && -d "$super_root" ]] || {
-            echo 'SuperConfig extraction did not create the database root' >&2
-            exit 1
-          }
-          mkdir -p legacy/bin/device
+          unzip -Z1 "$archive" > "$members"
+          grep -E '(^|/)SuperConfig/' "$members" > "$direct" || true
+          grep -E '(^|/)parts_info$' "$members" > "$parts" || true
+
           rm -rf legacy/bin/device/SuperConfig
-          cp -a "$super_root" legacy/bin/device/SuperConfig
-          test "$(find legacy/bin/device/SuperConfig -type f | wc -l)" -gt 0
-          rm -rf "$archive" "$extracted" "$RUNNER_TEMP/superconfig-members.txt"
+          mkdir -p legacy/bin/device/SuperConfig
+
+          if [[ -s "$direct" ]]; then
+            extracted="$RUNNER_TEMP/deadzone-old-superconfig"
+            rm -rf "$extracted"
+            mkdir -p "$extracted"
+            while IFS= read -r member; do
+              unzip -q -o "$archive" "$member" -d "$extracted"
+            done < "$direct"
+            super_root="$(find "$extracted" -type d -name SuperConfig -print -quit)"
+            [[ -n "$super_root" ]] || { echo 'SuperConfig root was not reconstructed' >&2; exit 1; }
+            cp -a "$super_root/." legacy/bin/device/SuperConfig/
+          elif [[ -s "$parts" ]]; then
+            while IFS= read -r part_member; do
+              source_dir="${part_member%/parts_info}"
+              codename="${source_dir##*/}"
+              [[ "$codename" =~ ^[A-Za-z0-9_-]+$ ]] || {
+                echo "Unsafe SuperConfig codename: $codename" >&2
+                exit 1
+              }
+              destination="legacy/bin/device/SuperConfig/${codename,,}"
+              mkdir -p "$destination"
+              unzip -p "$archive" "$part_member" > "$destination/parts_info"
+              super_member="$source_dir/super"
+              if grep -Fxq "$super_member" "$members"; then
+                unzip -p "$archive" "$super_member" > "$destination/super"
+              fi
+            done < "$parts"
+          else
+            echo 'No SuperConfig directory or parts_info files exist in the verified artifact.' >&2
+            grep -Ei '(superconfig|parts_info|(^|/)super$)' "$members" | head -n 100 >&2 || true
+            exit 1
+          fi
+
+          device_count="$(find legacy/bin/device/SuperConfig -mindepth 1 -maxdepth 1 -type d | wc -l)"
+          file_count="$(find legacy/bin/device/SuperConfig -type f | wc -l)"
+          ((device_count > 0 && file_count > 0)) || {
+            echo 'Resolved SuperConfig database is empty' >&2
+            exit 1
+          }
+          echo "Restored SuperConfig devices: $device_count; files: $file_count"
+          rm -rf "$archive" "$members" "$direct" "$parts" "${extracted:-}"
 
       - name: Install standard Linux fallbacks
         shell: bash
