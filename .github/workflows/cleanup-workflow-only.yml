@@ -1,0 +1,43 @@
+name: Convert Repository To Workflow Only
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/cleanup-workflow-only.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Keep workflows only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          find . -mindepth 1 -maxdepth 1 \
+            ! -name .git \
+            ! -name .github \
+            -exec rm -rf -- {} +
+          find .github -mindepth 1 -maxdepth 1 \
+            ! -name workflows \
+            -exec rm -rf -- {} +
+          rm -f .github/workflows/cleanup-workflow-only.yml
+
+      - name: Commit workflow-only layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name deadzone-build-cleanup
+          git config user.email actions@users.noreply.github.com
+          git add -A
+          git commit -m 'Keep DeadZone Build workflows only'
+          git push origin HEAD:main
