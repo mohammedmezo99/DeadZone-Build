@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v12
+  group: deadzone-build-machine-bootstrap-v13
   cancel-in-progress: true
 
 jobs:
@@ -72,15 +72,34 @@ jobs:
           set -Eeuo pipefail
           [[ -n "$MACHINE_TOKEN" ]] || { echo 'Machine write token is missing' >&2; exit 1; }
           sudo apt-get update
-          for package in \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             brotli zstd zip rclone erofs-utils android-sdk-libsparse-utils \
-            libc++-dev libc++abi-dev libunwind-dev; do
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package" || true
-          done
+            libc++-18-dev libc++abi-18-dev libunwind-18-dev
 
       - name: Assemble tools assets libraries and Runtime
         shell: bash
-        run: bash machine/scripts/bootstrap_internal_tools.sh "$GITHUB_WORKSPACE/legacy"
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("machine/scripts/bootstrap_internal_tools.sh")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              'find "$legacy/bin/tool" /usr/lib /lib \\\n        -type f -name "$name" -print 2>/dev/null',
+              'find "$legacy/bin/tool" /usr/lib /lib \\\n        \\( -type f -o -type l \\) -name "$name" -print 2>/dev/null',
+          )
+          text = text.replace(
+              'find "$legacy/bin/tool" -type f -name \'*.so*\' -print 2>/dev/null',
+              'find "$legacy/bin/tool" \\( -type f -o -type l \\) -name \'*.so*\' -print 2>/dev/null',
+          )
+          text = text.replace(
+              'find /usr/lib /lib -type f -name "$pattern" -print 2>/dev/null',
+              'find /usr/lib /lib \\( -type f -o -type l \\) -name "$pattern" -print 2>/dev/null',
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+          bash machine/scripts/bootstrap_internal_tools.sh "$GITHUB_WORKSPACE/legacy"
 
       - name: Commit complete Machine
         shell: bash
