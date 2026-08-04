@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v8
+  group: deadzone-build-machine-bootstrap-v9
   cancel-in-progress: true
 
 jobs:
@@ -97,7 +97,8 @@ jobs:
             done
           fi
 
-          git add -A tools assets runtime/template .github/workflows .gitattributes
+          git add -A tools assets runtime/template .github/workflows
+          [[ -f .gitattributes ]] && git add .gitattributes
           git commit -m 'Store complete toolchain and runtime assets inside Machine'
           git pull --rebase origin main
           git push origin HEAD:main
