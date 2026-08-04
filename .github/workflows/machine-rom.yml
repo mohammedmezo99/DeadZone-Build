@@ -61,12 +61,6 @@ jobs:
           remove-haskell: "true"
           remove-docker-images: "true"
 
-      - name: "Checkout DeadZone Build"
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: "Load DeadZone secrets"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -84,6 +78,16 @@ jobs:
           DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
         run: bash .deadzone-secrets/load-build.sh "${DEADZONE_PROJECT}"
 
+      - name: "Checkout DeadZone Machine"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Machine
+          ref: main
+          path: machine
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
       - name: "Resolve build request"
         id: mode
         shell: bash
@@ -92,7 +96,7 @@ jobs:
           INPUT_ROM_LINK: ${{ inputs.rom_link }}
           INPUT_BUILDER_LABEL: ${{ inputs.builder_label }}
           INPUT_LANGUAGE: ${{ inputs.language }}
-        run: python3 scripts/resolve-machine-request.py
+        run: python3 machine/integrations/github-actions/resolve_request.py
 
       - name: "Validate private runtime"
         shell: bash
@@ -103,26 +107,6 @@ jobs:
           for key in RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
             [[ -n "${!key:-}" ]] || { echo "Missing $key" >&2; exit 1; }
           done
-
-      - name: "Checkout DeadZone Machine"
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: mohammedmezo99/DeadZone-Machine
-          ref: main
-          path: machine
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: "Checkout DeadZone Toolchain"
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: mohammedmezo99/DeadZone-Toolchain
-          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
-          ref: main
-          path: toolchain
-          fetch-depth: 1
-          lfs: true
-          persist-credentials: false
 
       - name: "Checkout selected Edition"
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -152,7 +136,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          install -m 0755 scripts/machine-event-bridge.sh "$RUNNER_TEMP/deadzone-machine-event"
+          install -m 0755 machine/integrations/github-actions/event_bridge.sh "$RUNNER_TEMP/deadzone-machine-event"
           echo "DEADZONE_EVENT_COMMAND=$RUNNER_TEMP/deadzone-machine-event" >> "$GITHUB_ENV"
 
       - name: "Create Machine request"
@@ -184,7 +168,6 @@ jobs:
       - name: "Run DeadZone Machine"
         shell: bash
         env:
-          DEADZONE_TOOLCHAIN_ROOT: ${{ github.workspace }}/toolchain
           DEADZONE_EDITION_SOURCE_DIR: ${{ github.workspace }}/edition
         run: |
           set -Eeuo pipefail
@@ -195,7 +178,6 @@ jobs:
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
             GITHUB_RUN_ID="$GITHUB_RUN_ID" \
             GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            DEADZONE_TOOLCHAIN_ROOT="$DEADZONE_TOOLCHAIN_ROOT" \
             DEADZONE_EDITION_SOURCE_DIR="$DEADZONE_EDITION_SOURCE_DIR" \
             DEADZONE_EVENT_COMMAND="${DEADZONE_EVENT_COMMAND:-}" \
             DEADZONE_CONTROLLED_BUILD="${DEADZONE_CONTROLLED_BUILD:-0}" \
