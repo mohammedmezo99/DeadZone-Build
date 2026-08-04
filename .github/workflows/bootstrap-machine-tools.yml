@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v6
+  group: deadzone-build-machine-bootstrap-v7
   cancel-in-progress: true
 
 jobs:
@@ -66,70 +66,132 @@ jobs:
           lfs: false
           persist-credentials: false
 
-      - name: Restore pinned SuperConfig database
+      - name: Discover and import SuperConfig
         shell: bash
-        env:
-          LEGACY_ARTIFACT_ID: "8863484267"
         run: |
           set -Eeuo pipefail
-          archive="$RUNNER_TEMP/deadzone-old-assets.zip"
-          members="$RUNNER_TEMP/deadzone-old-members.txt"
-          direct="$RUNNER_TEMP/superconfig-direct-members.txt"
-          parts="$RUNNER_TEMP/superconfig-parts-info.txt"
-          curl --fail --location --show-error \
-            --retry 5 --retry-all-errors \
-            -H "Authorization: Bearer $MACHINE_TOKEN" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "https://api.github.com/repos/mohammedmezo99/DeadZone_Lite_old/actions/artifacts/${LEGACY_ARTIFACT_ID}/zip" \
-            --output "$archive"
-          unzip -Z1 "$archive" > "$members"
-          grep -E '(^|/)SuperConfig/' "$members" > "$direct" || true
-          grep -E '(^|/)parts_info$' "$members" > "$parts" || true
+          candidates=(
+            DeadZone_Lite
+            DeadZone_Lite_Next
+            mezo_lite
+            backup
+            xiaomi-toolbuild
+            build_xiaomi-toolbuild_mezo
+            DeadZone_GamingPlus
+            DeadZone_Legend
+            DeadZone_Ninja
+          )
+          headers=(
+            -H "Authorization: Bearer $MACHINE_TOKEN"
+            -H 'Accept: application/vnd.github+json'
+            -H 'X-GitHub-Api-Version: 2022-11-28'
+          )
+          selected_repo=""
+          selected_branch=""
+          selected_prefix=""
+          tree_file="$RUNNER_TEMP/superconfig-tree.json"
 
-          rm -rf legacy/bin/device/SuperConfig
-          mkdir -p legacy/bin/device/SuperConfig
+          for repo in "${candidates[@]}"; do
+            metadata="$RUNNER_TEMP/${repo}-metadata.json"
+            if ! curl -fsSL "${headers[@]}" \
+              "https://api.github.com/repos/mohammedmezo99/${repo}" -o "$metadata"; then
+              continue
+            fi
+            branch="$(jq -r '.default_branch // "main"' "$metadata")"
+            if ! curl -fsSL "${headers[@]}" \
+              "https://api.github.com/repos/mohammedmezo99/${repo}/git/trees/${branch}?recursive=1" \
+              -o "$tree_file"; then
+              continue
+            fi
+            prefix="$(python3 - "$tree_file" <<'PY'
+          import json
+          import sys
+          from collections import Counter
+          from pathlib import PurePosixPath
 
-          if [[ -s "$direct" ]]; then
-            extracted="$RUNNER_TEMP/deadzone-old-superconfig"
-            rm -rf "$extracted"
-            mkdir -p "$extracted"
-            while IFS= read -r member; do
-              unzip -q -o "$archive" "$member" -d "$extracted"
-            done < "$direct"
-            super_root="$(find "$extracted" -type d -name SuperConfig -print -quit)"
-            [[ -n "$super_root" ]] || { echo 'SuperConfig root was not reconstructed' >&2; exit 1; }
-            cp -a "$super_root/." legacy/bin/device/SuperConfig/
-          elif [[ -s "$parts" ]]; then
-            while IFS= read -r part_member; do
-              source_dir="${part_member%/parts_info}"
-              codename="${source_dir##*/}"
-              [[ "$codename" =~ ^[A-Za-z0-9_-]+$ ]] || {
-                echo "Unsafe SuperConfig codename: $codename" >&2
-                exit 1
-              }
-              destination="legacy/bin/device/SuperConfig/${codename,,}"
-              mkdir -p "$destination"
-              unzip -p "$archive" "$part_member" > "$destination/parts_info"
-              super_member="$source_dir/super"
-              if grep -Fxq "$super_member" "$members"; then
-                unzip -p "$archive" "$super_member" > "$destination/super"
-              fi
-            done < "$parts"
-          else
-            echo 'No SuperConfig directory or parts_info files exist in the verified artifact.' >&2
-            grep -Ei '(superconfig|parts_info|(^|/)super$)' "$members" | head -n 100 >&2 || true
-            exit 1
-          fi
+          document = json.load(open(sys.argv[1], encoding="utf-8"))
+          paths = [
+              str(item.get("path") or "")
+              for item in document.get("tree", [])
+              if item.get("type") in {"blob", "tree"}
+          ]
+          roots = []
+          for raw in paths:
+              parts = PurePosixPath(raw).parts
+              lowered = [part.casefold() for part in parts]
+              if "superconfig" in lowered:
+                  index = lowered.index("superconfig")
+                  roots.append("/".join(parts[: index + 1]))
+          if roots:
+              print(Counter(roots).most_common(1)[0][0])
+              raise SystemExit(0)
 
-          device_count="$(find legacy/bin/device/SuperConfig -mindepth 1 -maxdepth 1 -type d | wc -l)"
-          file_count="$(find legacy/bin/device/SuperConfig -type f | wc -l)"
-          ((device_count > 0 && file_count > 0)) || {
-            echo 'Resolved SuperConfig database is empty' >&2
+          metadata_files = [
+              PurePosixPath(raw)
+              for raw in paths
+              if PurePosixPath(raw).name in {"parts_info", "super"}
+          ]
+          inferred = []
+          for path in metadata_files:
+              if len(path.parts) >= 3:
+                  inferred.append("/".join(path.parts[:-2]))
+          if inferred:
+              root, count = Counter(inferred).most_common(1)[0]
+              if count >= 2:
+                  print(root)
+          PY
+            )"
+            if [[ -n "$prefix" ]]; then
+              selected_repo="$repo"
+              selected_branch="$branch"
+              selected_prefix="$prefix"
+              break
+            fi
+          done
+
+          [[ -n "$selected_repo" && -n "$selected_prefix" ]] || {
+            echo 'No real SuperConfig source was found in the configured repositories.' >&2
             exit 1
           }
-          echo "Restored SuperConfig devices: $device_count; files: $file_count"
-          rm -rf "$archive" "$members" "$direct" "$parts" "${extracted:-}"
+
+          echo "Using SuperConfig source: ${selected_repo}:${selected_prefix}"
+          source_root="$RUNNER_TEMP/superconfig-source"
+          rm -rf "$source_root" legacy/bin/device/SuperConfig
+          mkdir -p "$source_root" legacy/bin/device/SuperConfig
+          auth="$(printf 'x-access-token:%s' "$MACHINE_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            clone --depth=1 --filter=blob:none --sparse \
+            --branch "$selected_branch" \
+            "https://github.com/mohammedmezo99/${selected_repo}.git" \
+            "$source_root"
+          git -C "$source_root" sparse-checkout set "$selected_prefix"
+          [[ -d "$source_root/$selected_prefix" ]] || {
+            echo "Resolved SuperConfig path is absent after sparse checkout: $selected_prefix" >&2
+            exit 1
+          }
+          cp -a "$source_root/$selected_prefix/." legacy/bin/device/SuperConfig/
+
+          python3 - "$selected_repo" "$selected_branch" "$selected_prefix" \
+            > legacy/bin/device/SuperConfig/.deadzone-source.json <<'PY'
+          import json
+          import sys
+          print(json.dumps({
+              "schema_version": 1,
+              "repository": f"mohammedmezo99/{sys.argv[1]}",
+              "ref": sys.argv[2],
+              "path": sys.argv[3],
+          }, indent=2, sort_keys=True))
+          PY
+
+          device_count="$(find legacy/bin/device/SuperConfig -mindepth 1 -maxdepth 1 -type d | wc -l)"
+          metadata_count="$(find legacy/bin/device/SuperConfig -type f \( -name parts_info -o -name super \) | wc -l)"
+          ((device_count > 0 && metadata_count > 0)) || {
+            echo 'Discovered SuperConfig source contains no usable device metadata.' >&2
+            exit 1
+          }
+          echo "Imported SuperConfig devices: $device_count; metadata files: $metadata_count"
+          rm -rf "$source_root" "$tree_file" "$RUNNER_TEMP"/*-metadata.json
 
       - name: Install standard Linux fallbacks
         shell: bash
