@@ -66,11 +66,21 @@ jobs:
           unzip -q "$archive" -d "$payload"
           (cd "$payload" && sha256sum -c deadzone-machine-certification.tar.gz.sha256)
 
+      - name: Install runner dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo timedatectl set-timezone Africa/Cairo
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl file git jq openjdk-17-jre-headless python3 tar unzip xz-utils
+          java -version
+
       - name: Maximize build workspace
         uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
         with:
           swap-size-mb: 1024
-          root-reserve-mb: 512
+          root-reserve-mb: 2048
           remove-dotnet: "true"
           remove-android: "true"
           remove-haskell: "true"
@@ -117,18 +127,15 @@ jobs:
           lfs: true
           persist-credentials: false
 
-      - name: Prepare runner and verify Machine
+      - name: Verify Machine and Edition
         shell: bash
         run: |
           set -Eeuo pipefail
-          sudo timedatectl set-timezone Africa/Cairo
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl file git jq openjdk-17-jre-headless python3 tar unzip xz-utils
           make -C machine ci
           machine/bin/deadzone-machine doctor --json | tee machine-doctor.json
           bash -n edition/edition/run.sh
           jq -e '.schema_version == 1 and .machine_api == 1 and .id == "lite"' edition/edition/manifest.json >/dev/null
+          df -h / "$GITHUB_WORKSPACE"
 
       - name: Create certification request
         shell: bash
