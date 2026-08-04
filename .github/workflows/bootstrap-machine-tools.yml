@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v2
+  group: deadzone-build-machine-bootstrap-v3
   cancel-in-progress: true
 
 jobs:
@@ -59,6 +59,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: mohammedmezo99/DeadZone_Lite_old
+          token: ${{ env.MACHINE_TOKEN }}
           ref: 27e489cf077b8af2ab09cd45c68b8674e71471d6
           path: legacy
           fetch-depth: 1
