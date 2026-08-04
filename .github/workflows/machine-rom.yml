@@ -1,0 +1,247 @@
+name: "DeadZone Machine ROM"
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        required: true
+        type: string
+      project_code:
+        required: true
+        type: string
+      edition_repository:
+        required: true
+        type: string
+      edition_ref:
+        required: false
+        default: main
+        type: string
+      request_id:
+        required: false
+        type: string
+      rom_link:
+        required: false
+        type: string
+      builder_label:
+        required: false
+        type: string
+      language:
+        required: false
+        default: en
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deadzone-${{ inputs.project }}-machine-queue
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: "Build ${{ inputs.project }} with DeadZone Machine"
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      DEADZONE_PROJECT: ${{ inputs.project }}
+      DEADZONE_PROJECT_CODE: ${{ inputs.project_code }}
+      DEADZONE_EDITION_REPOSITORY: ${{ inputs.edition_repository }}
+      DEADZONE_EDITION_REF: ${{ inputs.edition_ref }}
+      CONTROL_BOT_CONTRACT_URL: https://deadzone-mezo-v3-20260726.fly.dev/contract/resolve
+      CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
+
+    steps:
+      - name: "Maximize build workspace"
+        uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
+        with:
+          swap-size-mb: 1024
+          root-reserve-mb: 512
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-docker-images: "true"
+
+      - name: "Checkout DeadZone Build"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: "Load DeadZone secrets"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: "Import project runtime"
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh "${DEADZONE_PROJECT}"
+
+      - name: "Resolve build request"
+        id: mode
+        shell: bash
+        env:
+          INPUT_REQUEST_ID: ${{ inputs.request_id }}
+          INPUT_ROM_LINK: ${{ inputs.rom_link }}
+          INPUT_BUILDER_LABEL: ${{ inputs.builder_label }}
+          INPUT_LANGUAGE: ${{ inputs.language }}
+        run: python3 scripts/resolve-machine-request.py
+
+      - name: "Validate private runtime"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${PRIVATE_REPO_TOKEN:-}" ]] || { echo "Missing private repository token" >&2; exit 1; }
+          [[ -n "${BUILD_PROGRESS_SECRET:-}" || "${DEADZONE_CONTROLLED_BUILD:-0}" == "0" ]] || { echo "Missing BUILD_PROGRESS_SECRET" >&2; exit 1; }
+          for key in RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
+            [[ -n "${!key:-}" ]] || { echo "Missing $key" >&2; exit 1; }
+          done
+
+      - name: "Checkout DeadZone Machine"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Machine
+          ref: main
+          path: machine
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: "Checkout DeadZone Toolchain"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Toolchain
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
+          ref: main
+          path: toolchain
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
+      - name: "Checkout selected Edition"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ inputs.edition_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
+          ref: ${{ inputs.edition_ref }}
+          path: edition
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
+      - name: "Prepare runner"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo timedatectl set-timezone Africa/Cairo
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl file git jq openjdk-17-jre-headless python3 tar unzip xz-utils
+          bash machine/scripts/validate.sh
+          bash -n edition/edition/run.sh
+          jq -e '.schema_version == 1 and .machine_api == 1' edition/edition/manifest.json >/dev/null
+
+      - name: "Prepare live event bridge"
+        if: steps.mode.outputs.mode == 'bot'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -m 0755 scripts/machine-event-bridge.sh "$RUNNER_TEMP/deadzone-machine-event"
+          echo "DEADZONE_EVENT_COMMAND=$RUNNER_TEMP/deadzone-machine-event" >> "$GITHUB_ENV"
+
+      - name: "Create Machine request"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rom_url="$(printf '%s' "$ROM_URL_B64" | base64 --decode)"
+          builder_name="$(printf '%s' "$BUILDER_NAME_B64" | base64 --decode)"
+          echo "::add-mask::$rom_url"
+          jq -n \
+            --arg request_id "$REQUEST_ID" \
+            --arg source "$rom_url" \
+            --arg edition "$DEADZONE_PROJECT" \
+            --arg repository "$DEADZONE_EDITION_REPOSITORY" \
+            --arg ref "$DEADZONE_EDITION_REF" \
+            --arg builder_id "$BUILDER_ID" \
+            --arg builder_name "$builder_name" \
+            '{request_id:$request_id,rom:{source:$source},edition:{id:$edition,repository:$repository,ref:$ref},builder:{id:$builder_id,name:$builder_name}}' \
+            > request.json
+
+          upload_root="${RCLONE_UPLOAD_DIR%/}"
+          if [[ "${DEADZONE_CONTROLLED_BUILD:-0}" == "1" ]]; then
+            upload_root="${upload_root}/builders/${BUILDER_SLUG}_${BUILDER_ID}/${REQUEST_ID}"
+          else
+            upload_root="${upload_root}/direct/${GITHUB_ACTOR}/${GITHUB_RUN_ID}"
+          fi
+          echo "DEADZONE_UPLOAD_ROOT=$upload_root" >> "$GITHUB_ENV"
+
+      - name: "Run DeadZone Machine"
+        shell: bash
+        env:
+          DEADZONE_TOOLCHAIN_ROOT: ${{ github.workspace }}/toolchain
+          DEADZONE_EDITION_SOURCE_DIR: ${{ github.workspace }}/edition
+          RCLONE_UPLOAD_DIR: ${{ env.DEADZONE_UPLOAD_ROOT }}
+        run: |
+          set -Eeuo pipefail
+          sudo -E env \
+            PATH="$PATH" \
+            HOME="$HOME" \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            DEADZONE_TOOLCHAIN_ROOT="$DEADZONE_TOOLCHAIN_ROOT" \
+            DEADZONE_EDITION_SOURCE_DIR="$DEADZONE_EDITION_SOURCE_DIR" \
+            DEADZONE_EVENT_COMMAND="${DEADZONE_EVENT_COMMAND:-}" \
+            RCLONE_CONFIG_BASE64="$RCLONE_CONFIG_BASE64" \
+            RCLONE_REMOTE_NAME="$RCLONE_REMOTE_NAME" \
+            RCLONE_UPLOAD_DIR="$RCLONE_UPLOAD_DIR" \
+            bash machine/machine.sh --request "$GITHUB_WORKSPACE/request.json" \
+            2>&1 | tee deadzone-machine.log
+
+      - name: "Expose verified result"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_path="machine/runtime/builds/${REQUEST_ID}/reports/delivery/deadzone-result.json"
+          [[ -s "$source_path" ]] || { echo "Machine result contract is missing" >&2; exit 1; }
+          cp -- "$source_path" deadzone-result.json
+          jq -e --arg request_id "$REQUEST_ID" --arg project "$DEADZONE_PROJECT" \
+            '.schema_version == "1.0" and .status == "success" and .request_id == $request_id and .project == $project' \
+            deadzone-result.json >/dev/null
+
+      - name: "Upload result contract"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deadzone-result-${{ env.REQUEST_ID }}
+          path: deadzone-result.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: "Report cancellation"
+        if: cancelled() && steps.mode.outputs.mode == 'bot'
+        continue-on-error: true
+        shell: bash
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing cancelled 8 "DeadZone build was cancelled safely." || true
+
+      - name: "Upload diagnostics"
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deadzone-${{ inputs.project }}-diagnostics-${{ env.REQUEST_ID }}
+          path: |
+            deadzone-machine.log
+            request.json
+            machine/runtime/builds/${{ env.REQUEST_ID }}/logs/
+            machine/runtime/builds/${{ env.REQUEST_ID }}/reports/
+            machine/runtime/builds/${{ env.REQUEST_ID }}/checkpoints/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: "Cleanup temporary credentials"
+        if: always()
+        shell: bash
+        run: sudo rm -f -- "machine/runtime/builds/${REQUEST_ID:-unknown}/state/rclone.conf"
