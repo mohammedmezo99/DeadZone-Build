@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v10
+  group: deadzone-build-machine-bootstrap-v11
   cancel-in-progress: true
 
 jobs:
@@ -72,11 +72,13 @@ jobs:
           set -Eeuo pipefail
           [[ -n "$MACHINE_TOKEN" ]] || { echo 'Machine write token is missing' >&2; exit 1; }
           sudo apt-get update
-          for package in brotli zstd zip rclone erofs-utils android-sdk-libsparse-utils android-sdk-liblp-utils android-sdk-ext4-utils; do
+          for package in \
+            brotli zstd zip rclone erofs-utils android-sdk-libsparse-utils \
+            libc++-dev libc++abi-dev libunwind-dev; do
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package" || true
           done
 
-      - name: Assemble tools assets and Runtime
+      - name: Assemble tools assets libraries and Runtime
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -86,15 +88,105 @@ jobs:
           path = Path("machine/scripts/bootstrap_internal_tools.sh")
           text = path.read_text(encoding="utf-8")
           text = text.replace(
-              "python3 -m compileall -q tools/python\n",
+              "rm -rf tools/bin tools/python assets/flash-template runtime/template\n"
+              "mkdir -p tools/bin tools/python assets/flash-template runtime/template\n",
+              "rm -rf tools/bin tools/python tools/lib assets/flash-template runtime/template\n"
+              "mkdir -p tools/bin tools/python tools/lib assets/flash-template runtime/template\n",
+          )
+          marker = "copy_python_bundle supermeta supermeta.py\n\nflash_source=\"\"\n"
+          library_block = r'''copy_python_bundle supermeta supermeta.py
+
+copy_library_as() {
+    local source="$1"
+    local name="$2"
+    [[ -f "$source" || -L "$source" ]] || return 1
+    cp -L -- "$source" "tools/lib/$name"
+    chmod 0644 "tools/lib/$name"
+}
+
+find_library() {
+    local name="$1"
+    find \
+        "$legacy/bin/tool" \
+        /usr/lib /lib \
+        -type f -name "$name" -print 2>/dev/null \
+        | sort \
+        | head -n1
+}
+
+while IFS= read -r source; do
+    [[ -n "$source" ]] || continue
+    copy_library_as "$source" "$(basename -- "$source")"
+done < <(
+    find "$legacy/bin/tool" -type f -name '*.so*' -print 2>/dev/null | sort
+)
+
+for pattern in 'libc++.so*' 'libc++abi.so*' 'libunwind.so*'; do
+    while IFS= read -r source; do
+        [[ -n "$source" ]] || continue
+        copy_library_as "$source" "$(basename -- "$source")"
+    done < <(find /usr/lib /lib -type f -name "$pattern" -print 2>/dev/null | sort -u)
+done
+
+for pass in 1 2 3 4; do
+    copied=0
+    unresolved=0
+    while IFS= read -r binary; do
+        file "$binary" | grep -q 'ELF' || continue
+        ldd_output="$(LD_LIBRARY_PATH="$root/tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ldd "$binary" 2>&1 || true)"
+        while IFS= read -r dependency; do
+            [[ -n "$dependency" ]] || continue
+            if [[ -f "tools/lib/$dependency" ]]; then
+                continue
+            fi
+            source="$(find_library "$dependency")"
+            if [[ -n "$source" ]]; then
+                copy_library_as "$source" "$dependency"
+                copied=1
+                printf '[INFO] Bundled runtime library %s from %s\n' "$dependency" "$source"
+            else
+                printf '[ERROR] Runtime library cannot be resolved: %s requires %s\n' "$binary" "$dependency" >&2
+                unresolved=1
+            fi
+        done < <(awk '/not found/{print $1}' <<<"$ldd_output" | sort -u)
+    done < <(find tools/bin -maxdepth 1 -type f -print | sort)
+    ((unresolved == 0)) && break
+    ((copied == 1)) || exit 1
+done
+
+flash_source=""
+'''
+          if marker not in text:
+              raise SystemExit("bootstrap library insertion marker is missing")
+          text = text.replace(marker, library_block)
+          text = text.replace(
+              "python3 -m compileall -q tools/python\n"
+              "while IFS= read -r binary; do\n"
+              "    file \"$binary\" | grep -q 'ELF' || continue\n"
+              "    missing=\"$(ldd \"$binary\" 2>/dev/null | awk '/not found/{print $1}' | paste -sd, -)\"\n"
+              "    [[ -z \"$missing\" ]] || {\n"
+              "        printf '[ERROR] Native tool has unresolved libraries: %s -> %s\\n' \"$binary\" \"$missing\" >&2\n"
+              "        exit 1\n"
+              "    }\n"
+              "done < <(find tools/bin -maxdepth 1 -type f -print | sort)\n\n"
+              "find tools/bin tools/python -type f -print0 | sort -z | xargs -0 sha256sum > tools/checksums.sha256\n",
               "while IFS= read -r python_file; do\n"
               "    PYTHONPYCACHEPREFIX=\"${TMPDIR:-/tmp}/deadzone-pyc\" python3 -m py_compile \"$python_file\"\n"
-              "done < <(find tools/python -type f -name '*.py' -print | sort)\n",
+              "done < <(find tools/python -type f -name '*.py' -print | sort)\n"
+              "while IFS= read -r binary; do\n"
+              "    file \"$binary\" | grep -q 'ELF' || continue\n"
+              "    ldd_output=\"$(LD_LIBRARY_PATH=\"$root/tools/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\" ldd \"$binary\" 2>&1 || true)\"\n"
+              "    missing=\"$(awk '/not found/{print $1}' <<<\"$ldd_output\" | paste -sd, -)\"\n"
+              "    [[ -z \"$missing\" ]] || {\n"
+              "        printf '[ERROR] Native tool has unresolved libraries: %s -> %s\\n' \"$binary\" \"$missing\" >&2\n"
+              "        exit 1\n"
+              "    }\n"
+              "done < <(find tools/bin -maxdepth 1 -type f -print | sort)\n\n"
+              "find tools/bin tools/python tools/lib -type f -print0 | sort -z | xargs -0 sha256sum > tools/checksums.sha256\n",
           )
           text = text.replace(
-              "    missing=\"$(ldd \"$binary\" 2>/dev/null | awk '/not found/{print $1}' | paste -sd, -)\"\n",
-              "    ldd_output=\"$(ldd \"$binary\" 2>&1 || true)\"\n"
-              "    missing=\"$(awk '/not found/{print $1}' <<<\"$ldd_output\" | paste -sd, -)\"\n",
+              '    "path_entries": ["tools/bin"],\n',
+              '    "path_entries": ["tools/bin"],\n    "library_entries": ["tools/lib"],\n',
           )
           path.write_text(text, encoding="utf-8")
           PY
