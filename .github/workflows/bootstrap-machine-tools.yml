@@ -1,0 +1,87 @@
+name: Bootstrap Complete DeadZone Machine
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/bootstrap-machine-tools.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deadzone-build-machine-bootstrap
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MACHINE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Checkout DeadZone Machine
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Machine
+          token: ${{ env.MACHINE_TOKEN }}
+          ref: main
+          path: machine
+          fetch-depth: 0
+          lfs: true
+          persist-credentials: true
+
+      - name: Checkout pinned legacy tool source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone_Lite_old
+          ref: 27e489cf077b8af2ab09cd45c68b8674e71471d6
+          path: legacy
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
+      - name: Install standard Linux fallbacks
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$MACHINE_TOKEN" ]] || { echo 'Machine write token is missing' >&2; exit 1; }
+          sudo apt-get update
+          for package in brotli zstd zip rclone erofs-utils android-sdk-libsparse-utils android-sdk-liblp-utils android-sdk-ext4-utils; do
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package" || true
+          done
+
+      - name: Assemble tools assets and Runtime
+        shell: bash
+        run: bash machine/scripts/bootstrap_internal_tools.sh "$GITHUB_WORKSPACE/legacy"
+
+      - name: Commit complete Machine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd machine
+          rm -f .github/workflows/bootstrap-internal-tools.yml reports/bootstrap-internal-tools.log
+          git config user.name deadzone-machine-bootstrap
+          git config user.email actions@users.noreply.github.com
+          git add -A tools assets runtime/template .github/workflows reports
+          git commit -m 'Store complete toolchain and runtime assets inside Machine'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Remove temporary bootstrap workflow
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf machine legacy
+          git rm -f .github/workflows/bootstrap-machine-tools.yml
+          git config user.name deadzone-build-cleanup
+          git config user.email actions@users.noreply.github.com
+          git commit -m 'Remove completed Machine bootstrap workflow'
+          git pull --rebase origin main
+          git push origin HEAD:main
