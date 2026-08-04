@@ -117,7 +117,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: mohammedmezo99/DeadZone-Toolchain
-          token: ${{ env.PRIVATE_REPO_TOKEN }}
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
           ref: main
           path: toolchain
           fetch-depth: 1
@@ -128,7 +128,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: ${{ inputs.edition_repository }}
-          token: ${{ env.PRIVATE_REPO_TOKEN }}
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
           ref: ${{ inputs.edition_ref }}
           path: edition
           fetch-depth: 1
@@ -186,19 +186,29 @@ jobs:
         env:
           DEADZONE_TOOLCHAIN_ROOT: ${{ github.workspace }}/toolchain
           DEADZONE_EDITION_SOURCE_DIR: ${{ github.workspace }}/edition
-          RCLONE_UPLOAD_DIR: ${{ env.DEADZONE_UPLOAD_ROOT }}
         run: |
           set -Eeuo pipefail
           sudo -E env \
             PATH="$PATH" \
             HOME="$HOME" \
             GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
             DEADZONE_TOOLCHAIN_ROOT="$DEADZONE_TOOLCHAIN_ROOT" \
             DEADZONE_EDITION_SOURCE_DIR="$DEADZONE_EDITION_SOURCE_DIR" \
             DEADZONE_EVENT_COMMAND="${DEADZONE_EVENT_COMMAND:-}" \
+            DEADZONE_CONTROLLED_BUILD="${DEADZONE_CONTROLLED_BUILD:-0}" \
+            DEADZONE_PROJECT="$DEADZONE_PROJECT" \
+            REQUEST_ID="$REQUEST_ID" \
+            REQUEST_SOURCE="$REQUEST_SOURCE" \
+            BUILD_PROGRESS_SECRET="${BUILD_PROGRESS_SECRET:-}" \
+            CONTROL_BOT_TELEMETRY_URL="$CONTROL_BOT_TELEMETRY_URL" \
+            TELEGRAM_MSG_CHAT_ID="${TELEGRAM_MSG_CHAT_ID:-}" \
+            TELEGRAM_MSG_ID="${TELEGRAM_MSG_ID:-}" \
             RCLONE_CONFIG_BASE64="$RCLONE_CONFIG_BASE64" \
             RCLONE_REMOTE_NAME="$RCLONE_REMOTE_NAME" \
-            RCLONE_UPLOAD_DIR="$RCLONE_UPLOAD_DIR" \
+            RCLONE_UPLOAD_DIR="$DEADZONE_UPLOAD_ROOT" \
             bash machine/machine.sh --request "$GITHUB_WORKSPACE/request.json" \
             2>&1 | tee deadzone-machine.log
 
