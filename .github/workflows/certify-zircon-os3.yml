@@ -8,10 +8,38 @@ on:
       - .github/workflows/certify-zircon-os3.yml
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: certify-zircon-os3
+  cancel-in-progress: true
 
 jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - name: Record certification run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .github/certification
+          jq -n \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --arg rom "zircon-OS3.0.303.0.WNOCNXM" \
+            '{run_id:$run_id,commit:$commit,rom:$rom,status:"started"}' \
+            > .github/certification/zircon-run.json
+          git config user.name deadzone-certification
+          git config user.email actions@users.noreply.github.com
+          git add .github/certification/zircon-run.json
+          git commit -m 'Record active Zircon certification run'
+          git push origin HEAD:main
+
   certify:
+    needs: trace
     uses: ./.github/workflows/machine-rom.yml
     with:
       project: lite
