@@ -80,6 +80,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: mohammedmezo99/DeadZone-Machine
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
           ref: main
           path: machine
           fetch-depth: 1
