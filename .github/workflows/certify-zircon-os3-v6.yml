@@ -1,0 +1,232 @@
+name: "Certify Zircon Runtime Super Geometry"
+run-name: "Certify Zircon Runtime Super Geometry  ${{ github.run_id }}"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/certify-zircon-os3-v6.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: certify-zircon-runtime-super-geometry
+  cancel-in-progress: true
+
+env:
+  MACHINE_BUNDLE_URL: "https://sdmntprnortheu.oaiusercontent.com/files/00000000-3534-81f4-b4a0-9c2807116c81/raw?se=2026-08-04T19:08:28Z&sp=r&sv=2026-02-06&sr=b&scid=4aff2b8c-c7bb-5d57-8c7e-94e3c83841d7&skoid=ba81670d-b682-4d2d-9682-ac0ffdfb3fa1&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-04T05:03:54Z&ske=2026-08-05T05:03:54Z&sks=b&skv=2026-02-06&sig=wR6gcGSx798A/zeKuht2%2BZTF4X4Ak6vHj9ZiFfTSnmI%3D"
+  ROM_URL: "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS3.0.303.0.WNOCNXM/zircon-ota_full-OS3.0.303.0.WNOCNXM-user-16.0-09c35a83d6.zip"
+
+jobs:
+  certify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      DEADZONE_PROJECT: lite
+      DEADZONE_EDITION_REPOSITORY: mohammedmezo99/DeadZone_Lite
+      DEADZONE_EDITION_REF: main
+
+    steps:
+      - name: Checkout certification launcher
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+
+      - name: Record certification run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .github/certification
+          jq -n \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --arg rom "zircon-OS3.0.303.0.WNOCNXM" \
+            '{run_id:$run_id,commit:$commit,rom:$rom,status:"started",geometry:"runtime-evidence-only",workflow:"v6"}' \
+            > .github/certification/zircon-run-v6.json
+          git config user.name deadzone-certification
+          git config user.email actions@users.noreply.github.com
+          git add .github/certification/zircon-run-v6.json
+          git commit -m 'Record Zircon runtime geometry certification run'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Download and verify profile-free Machine bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          archive="$RUNNER_TEMP/machine-certification-bundle.zip"
+          payload="$RUNNER_TEMP/machine-certification-payload"
+          rm -rf "$payload"
+          mkdir -p "$payload"
+          curl --fail --location --show-error --retry 5 --retry-all-errors \
+            "$MACHINE_BUNDLE_URL" --output "$archive"
+          unzip -q "$archive" -d "$payload"
+          (cd "$payload" && sha256sum -c deadzone-machine-certification.tar.gz.sha256)
+          [[ -s "$payload/deadzone-machine-certification.tar.gz" ]]
+
+      - name: Maximize build workspace
+        uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
+        with:
+          swap-size-mb: 1024
+          root-reserve-mb: 512
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-docker-images: "true"
+
+      - name: Load DeadZone secrets
+        uses: actions/checkout@v5
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Import Lite runtime
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh lite
+
+      - name: Extract verified Machine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          payload="$RUNNER_TEMP/machine-certification-payload"
+          rm -rf machine
+          mkdir -p machine
+          tar -xzf "$payload/deadzone-machine-certification.tar.gz" -C machine
+          [[ -x machine/bin/deadzone-machine ]]
+          [[ -s machine/runtime/builds/README.md ]]
+          test ! -e machine/config/SuperConfig/zircon/super
+          test ! -e machine/core/rebuild/super_config.py
+          jq -e '.name == "DeadZone Machine" and .machine_api == 1' machine/config/machine.json >/dev/null
+
+      - name: Checkout Lite Edition
+        uses: actions/checkout@v5
+        with:
+          repository: mohammedmezo99/DeadZone_Lite
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: edition
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
+      - name: Prepare runner and verify Machine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo timedatectl set-timezone Africa/Cairo
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl file git jq openjdk-17-jre-headless python3 tar unzip xz-utils
+          make -C machine ci
+          machine/bin/deadzone-machine doctor --json | tee machine-doctor.json
+          bash -n edition/edition/run.sh
+          jq -e '.schema_version == 1 and .machine_api == 1 and .id == "lite"' edition/edition/manifest.json >/dev/null
+
+      - name: Create certification request
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          request_id="DZ-LT-RUNTIME-SUPER-${GITHUB_RUN_ID}"
+          echo "REQUEST_ID=$request_id" >> "$GITHUB_ENV"
+          echo "::add-mask::$ROM_URL"
+          jq -n \
+            --arg request_id "$request_id" \
+            --arg source "$ROM_URL" \
+            --arg repository "$DEADZONE_EDITION_REPOSITORY" \
+            --arg ref "$DEADZONE_EDITION_REF" \
+            '{request_id:$request_id,rom:{source:$source},edition:{id:"lite",repository:$repository,ref:$ref},builder:{id:"0",name:"DeadZone Runtime Super Certification"}}' \
+            > request.json
+          echo "DEADZONE_UPLOAD_ROOT=${RCLONE_UPLOAD_DIR%/}/certification/zircon-runtime-super/${GITHUB_RUN_ID}" >> "$GITHUB_ENV"
+
+      - name: Run DeadZone Machine on Zircon
+        shell: bash
+        env:
+          DEADZONE_EDITION_SOURCE_DIR: ${{ github.workspace }}/edition
+        run: |
+          set -Eeuo pipefail
+          sudo -E env \
+            PATH="$PATH" HOME="$HOME" \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+            GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            DEADZONE_EDITION_SOURCE_DIR="$DEADZONE_EDITION_SOURCE_DIR" \
+            DEADZONE_CONTROLLED_BUILD="0" \
+            DEADZONE_PROJECT="lite" \
+            REQUEST_ID="$REQUEST_ID" \
+            REQUEST_SOURCE="github-certification" \
+            RCLONE_CONFIG_BASE64="$RCLONE_CONFIG_BASE64" \
+            RCLONE_REMOTE_NAME="$RCLONE_REMOTE_NAME" \
+            RCLONE_UPLOAD_DIR="$DEADZONE_UPLOAD_ROOT" \
+            bash machine/machine.sh --request "$GITHUB_WORKSPACE/request.json" \
+            2>&1 | tee deadzone-machine.log
+
+      - name: Verify runtime Super evidence and result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          runtime="machine/runtime/builds/${REQUEST_ID}"
+          source_geometry="$runtime/metadata/super/source.json"
+          result="$runtime/reports/delivery/deadzone-result.json"
+          release="$runtime/output/manifests/release.json"
+          build="$runtime/reports/build-result.json"
+          for file in "$source_geometry" "$result" "$release" "$build"; do
+            [[ -s "$file" ]] || { echo "Missing certification file: $file" >&2; exit 1; }
+          done
+          jq -e \
+            '.super_size == 9126805504
+             and .super_size_source == "matching-fastboot-partition-table"
+             and .geometry_confidence == "exact"
+             and .geometry_evidence.source_type == "mediatek-scatter"
+             and (.geometry_evidence.source_member | test("scatter"; "i"))' \
+            "$source_geometry" >/dev/null
+          jq -e --arg request_id "$REQUEST_ID" \
+            '.schema_version == "1.0" and .status == "success" and .project == "lite" and .request_id == $request_id and .codename == "zircon"' \
+            "$result" >/dev/null
+          cp -- "$source_geometry" runtime-super-evidence.json
+          cp -- "$result" deadzone-result.json
+          cp -- "$release" certification-release.json
+          cp -- "$build" certification-build-result.json
+
+      - name: Upload certification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: zircon-runtime-super-${{ env.REQUEST_ID }}
+          path: |
+            runtime-super-evidence.json
+            deadzone-result.json
+            certification-release.json
+            certification-build-result.json
+            machine-doctor.json
+            deadzone-machine.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload compact failure diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zircon-runtime-super-diagnostics-${{ env.REQUEST_ID || github.run_id }}
+          path: |
+            deadzone-machine.log
+            machine-doctor.json
+            request.json
+            machine/runtime/builds/${{ env.REQUEST_ID }}/metadata/super/*.json
+            machine/runtime/builds/${{ env.REQUEST_ID }}/metadata/ota-metadata.json
+            machine/runtime/builds/${{ env.REQUEST_ID }}/reports/analysis/*.json
+            machine/runtime/builds/${{ env.REQUEST_ID }}/checkpoints/*.json
+            machine/runtime/builds/${{ env.REQUEST_ID }}/logs/*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Cleanup temporary credentials
+        if: always()
+        shell: bash
+        run: sudo rm -f -- "machine/runtime/builds/${REQUEST_ID:-unknown}/state/rclone.conf"
