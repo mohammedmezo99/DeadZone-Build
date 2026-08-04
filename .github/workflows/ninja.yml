@@ -1,57 +1,334 @@
 name: "🥷 DeadZone Ninja"
 
-run-name: "🥷 DeadZone Ninja • ${{ inputs.request_id || github.actor }}"
+run-name: "🥷 DeadZone Ninja • ${{ inputs.request_id }}"
 
 on:
   workflow_dispatch:
     inputs:
       request_id:
-        description: "Bot request ID. Leave empty for a manual GitHub build."
-        required: false
-        type: string
-      rom_link:
-        description: "HTTPS ROM link for a manual GitHub build."
-        required: false
-        type: string
-      builder_label:
-        description: "Optional builder label for a manual GitHub build."
-        required: false
-        type: string
-      language:
-        description: "Live build language."
-        required: false
-        default: "en"
-        type: choice
-        options: ["en", "ar"]
-  workflow_call:
-    inputs:
-      request_id:
+        description: "DeadZone Ninja request ID"
         required: true
-        type: string
-      rom_link:
-        required: false
-        type: string
-      builder_label:
-        required: false
-        type: string
-      language:
-        required: false
-        default: "en"
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: deadzone-ninja-build-queue
+  queue: max
+  cancel-in-progress: false
+
 jobs:
-  machine:
-    uses: ./.github/workflows/machine-rom.yml
-    with:
-      project: ninja
-      project_code: NJ
-      edition_repository: mohammedmezo99/DeadZone_Ninja
-      edition_ref: main
-      request_id: ${{ inputs.request_id }}
-      rom_link: ${{ inputs.rom_link }}
-      builder_label: ${{ inputs.builder_label }}
-      language: ${{ inputs.language }}
-    secrets: inherit
+  build:
+    name: "🥷 Build DeadZone Ninja"
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      REQUEST_ID: ${{ inputs.request_id }}
+      CONTROL_BOT_CONTRACT_URL: https://deadzone-mezo-v3-20260726.fly.dev/contract/resolve
+      CONTROL_BOT_TELEMETRY_URL: https://deadzone-mezo-v3-20260726.fly.dev/telemetry
+      DEADZONE_CONTROLLED_BUILD: "1"
+
+    steps:
+      - name: "⚡ Maximize Ninja build space"
+        uses: easimon/maximize-build-space@c28619d8999a147d5e09c1199f84ff6af6ad5794
+        with:
+          swap-size-mb: 1024
+          root-reserve-mb: 1024
+          temp-reserve-mb: 256
+          remove-dotnet: "true"
+          remove-android: "true"
+          remove-haskell: "true"
+          remove-codeql: "true"
+          remove-docker-images: "true"
+
+      - name: "📥 Checkout DeadZone launcher"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: "🔐 Load DeadZone secrets"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: mohammedmezo99/DeadZone-Secrets
+          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+          ref: main
+          path: .deadzone-secrets
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: "🔑 Import Ninja runtime"
+        id: central
+        shell: bash
+        env:
+          DEADZONE_PRIVATE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
+        run: bash .deadzone-secrets/load-build.sh ninja
+
+      - name: "🔐 Resolve private Ninja request"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$REQUEST_ID" =~ ^DZ-NJ-[0-9]{8}-[0-9]{4}$ ]] || { echo "Invalid Ninja request ID" >&2; exit 1; }
+          [[ -n "${BUILD_PROGRESS_SECRET:-}" ]] || { echo "Missing BUILD_PROGRESS_SECRET" >&2; exit 1; }
+          echo "BUILD_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import base64, hashlib, hmac, json, os, re, urllib.request
+          from datetime import datetime, timezone
+
+          secret = os.environ["BUILD_PROGRESS_SECRET"]
+          request_id = os.environ["REQUEST_ID"]
+          payload = {"schema_version":"1.0","request_id":request_id,"project":"ninja","timestamp":datetime.now(timezone.utc).isoformat()}
+          body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+          signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+          req = urllib.request.Request(os.environ["CONTROL_BOT_CONTRACT_URL"], data=body, method="POST", headers={"Content-Type":"application/json","X-DeadZone-Signature":signature})
+          with urllib.request.urlopen(req, timeout=20) as response:
+              response_body = response.read()
+              response_signature = response.headers.get("X-DeadZone-Signature", "")
+          expected = hmac.new(secret.encode(), response_body, hashlib.sha256).hexdigest()
+          if not hmac.compare_digest(expected, response_signature):
+              raise SystemExit("Invalid control response signature")
+          contract = json.loads(response_body)
+          if contract.get("request_id") != request_id or contract.get("project") != "ninja":
+              raise SystemExit("Ninja contract mismatch")
+
+          source_url = str((contract.get("source") or {}).get("url") or "")
+          builder = contract.get("builder") or {}
+          live = contract.get("live_message") or {}
+          builder_id = int(builder.get("telegram_user_id") or 0)
+          builder_slug = str(builder.get("slug") or "")
+          builder_name = str(builder.get("display_name") or builder.get("username") or builder_slug or "DeadZone Builder")
+          language = "ar" if str(contract.get("language") or "").lower() == "ar" else "en"
+          status_chat_id = int(live.get("chat_id") or 0)
+          status_message_id = int(live.get("message_id") or 0)
+
+          if not source_url.startswith("https://"):
+              raise SystemExit("Ninja source URL is invalid")
+          if builder_id <= 0 or not re.fullmatch(r"[a-z0-9_.-]{1,48}", builder_slug):
+              raise SystemExit("Builder identity is invalid")
+          if status_chat_id == 0 or status_message_id <= 0:
+              raise SystemExit("Ninja live-message contract is missing")
+
+          print(f"::add-mask::{source_url}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              out.write("ROM_URL_B64=" + base64.b64encode(source_url.encode()).decode() + "\n")
+              out.write(f"BUILDER_ID={builder_id}\nBUILDER_SLUG={builder_slug}\n")
+              out.write("BUILDER_NAME_B64=" + base64.b64encode(builder_name.encode()).decode() + "\n")
+              out.write(f"DEADZONE_LANGUAGE={language}\n")
+              out.write(f"TELEGRAM_MSG_CHAT_ID={status_chat_id}\n")
+              out.write(f"TELEGRAM_MSG_ID={status_message_id}\n")
+              out.write("REQUEST_SOURCE=telegram\nDEADZONE_CONTROLLED_BUILD=1\n")
+          PY
+
+      - name: "📡 Prepare DeadZone Ninja"
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing in_progress 0 "Preparing DeadZone Ninja." || true
+
+      - name: "🛡️ Validate Ninja runtime"
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for key in PRIVATE_REPO_TOKEN RCLONE_CONFIG_BASE64 RCLONE_REMOTE_NAME RCLONE_UPLOAD_DIR; do
+            [[ -n "${!key:-}" ]] || { echo "Missing required configuration: $key" >&2; exit 1; }
+          done
+
+      - name: "🥷 Load Ninja engine"
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" loading_engine in_progress 1 "Loading DeadZone Ninja engine." || true
+
+      - name: "📥 Checkout private Ninja engine"
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ steps.central.outputs.engine_repository }}
+          token: ${{ env.PRIVATE_REPO_TOKEN }}
+          ref: main
+          path: engine
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
+      - name: "☕ Prepare Java 17"
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: "🧰 Prepare Ninja tools"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" installing_tools in_progress 2 "Preparing Ninja toolchain." || true
+          python3 -m venv .venv
+          . .venv/bin/activate
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          bash bin/core/ci/setup.sh 2>&1 | tee setup_action.log
+          find . -type f -name '*.sh' -exec chmod +x {} +
+          bash -n build.sh
+          bash -n packROM.sh
+          bash -n uploadROM.sh
+
+      - name: "🛠️ Build DeadZone Ninja"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rom="$(printf '%s' "$ROM_URL_B64" | base64 --decode)"
+          export BUILDER_NAME="$(printf '%s' "$BUILDER_NAME_B64" | base64 --decode)"
+          export INPUT_URL="$rom"
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" building in_progress 3 "Building DeadZone Ninja." || true
+          env \
+            DEADZONE_CONTROLLED_BUILD=1 \
+            BUILDER_ID="$BUILDER_ID" \
+            BUILDER_SLUG="$BUILDER_SLUG" \
+            DEADZONE_LANGUAGE="$DEADZONE_LANGUAGE" \
+            TELEGRAM_MSG_CHAT_ID="$TELEGRAM_MSG_CHAT_ID" \
+            TELEGRAM_MSG_ID="$TELEGRAM_MSG_ID" \
+            bash build.sh "$rom" 2>&1 | tee build_action.log
+
+      - name: "📦 Package DeadZone Ninja"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" packaging in_progress 4 "Packaging DeadZone Ninja." || true
+          bash packROM.sh 2>&1 | tee pack_action.log
+          [[ -s build/baserom/images/super.img ]] || { echo "super.img is missing after Ninja packaging" >&2; exit 1; }
+
+      - name: "🔎 Verify Ninja package"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" preparing_upload in_progress 5 "Verifying Ninja package before delivery." || true
+          output="$(cat bin/runtime/info/output_zip.txt 2>/dev/null || cat bin/runtime/info/output_file.txt 2>/dev/null || true)"
+          output_path="$(cat bin/runtime/info/output_path.txt 2>/dev/null || true)"
+          artifact="${output_path:-out/$output}"
+          [[ -n "$output" && -s "$artifact" ]] || { echo "Ninja output archive is missing before upload" >&2; exit 1; }
+
+      - name: "☁️ Upload DeadZone Ninja"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base_dir="${RCLONE_UPLOAD_DIR%/}"
+          export RCLONE_UPLOAD_DIR="${base_dir}/ninja/${BUILDER_SLUG}_${BUILDER_ID}/${REQUEST_ID}"
+          bash uploadROM.sh setup 2>&1 | tee setup_upload_action.log
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" uploading in_progress 6 "Uploading DeadZone Ninja to DeadZone Cloud." || true
+          bash uploadROM.sh 2>&1 | tee upload_action.log
+          bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing in_progress 7 "Final verification for DeadZone Ninja." || true
+
+      - name: "✅ Create Ninja release contract"
+        working-directory: engine
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, re, zipfile
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          info = Path("bin/runtime/info")
+          def first(*names):
+              for name in names:
+                  path = info / name
+                  if path.is_file():
+                      value = path.read_text(encoding="utf-8", errors="replace").strip()
+                      if value:
+                          return value
+              return ""
+
+          file_name = first("output_zip.txt", "output_file.txt")
+          output_path = first("output_path.txt")
+          artifact = Path(output_path) if output_path else Path("out") / file_name
+          url = first("drive_link.txt", "upload_link.txt")
+          codename = first("device_f.txt", "device_code.txt").lower()
+          rom_version = first("base_rom_code.txt", "rom_version.txt")
+          android = first("androidver.txt", "android_version.txt")
+          region_raw = first("region.txt", "device_type.txt")
+          version = Path("Version").read_text(encoding="utf-8").strip()
+
+          if not file_name or not artifact.is_file() or artifact.stat().st_size <= 0:
+              raise SystemExit("Ninja output archive is missing")
+          if artifact.name != file_name:
+              raise SystemExit("Ninja output metadata mismatch")
+          parsed = urlsplit(url)
+          if parsed.scheme != "https" or (parsed.hostname or "").lower() not in {"drive.google.com", "docs.google.com"}:
+              raise SystemExit("Ninja Drive link is invalid")
+          if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,39}", codename):
+              raise SystemExit("Ninja codename is invalid")
+          with zipfile.ZipFile(artifact) as archive:
+              bad = archive.testzip()
+          if bad is not None:
+              raise SystemExit(f"Ninja ZIP is corrupt: {bad}")
+
+          regions = {
+              "china":"ChinaStable", "global":"GlobalStable", "eeaglobal":"EEAStable", "europe":"EEAStable",
+              "inglobal":"IndiaStable", "idglobal":"IndonesiaStable", "ruglobal":"RussiaStable",
+              "twglobal":"TaiwanStable", "trglobal":"TurkeyStable", "jpglobal":"JapanStable",
+          }
+          result = {
+              "schema_version":"1.1",
+              "request_id":os.environ["REQUEST_ID"],
+              "project":"ninja",
+              "edition":"Ninja",
+              "edition_version":"V" + version.lstrip("vV"),
+              "codename":codename,
+              "status":"success",
+              "provider":"google_drive",
+              "url":url,
+              "file_name":file_name,
+              "size":artifact.stat().st_size,
+              "rom_version":rom_version,
+              "android_version":android,
+              "region":regions.get(region_raw.lower(), region_raw),
+              "integrity_verified":True,
+              "completed_at":datetime.now(timezone.utc).isoformat(),
+          }
+          Path("../deadzone-result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: "📤 Expose Ninja result"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: deadzone-result-${{ env.REQUEST_ID }}
+          path: deadzone-result.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: "✅ Ninja completed"
+        if: success()
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" finalizing success 8 "DeadZone Ninja completed." || true
+
+      - name: "❌ Ninja failed"
+        if: failure()
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" failed "${DZ_COMPLETED_STAGES:-0}" "DeadZone Ninja stopped safely." || true
+
+      - name: "🚫 Ninja cancelled"
+        if: cancelled()
+        continue-on-error: true
+        run: bash "$GITHUB_WORKSPACE/.deadzone-secrets/runtime/emit_stage.sh" "${DZ_CURRENT_STAGE_KEY:-preparing}" cancelled "${DZ_COMPLETED_STAGES:-0}" "DeadZone Ninja was cancelled safely." || true
+
+      - name: "🧾 Upload Ninja diagnostics"
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ninja-diagnostics-${{ env.REQUEST_ID }}
+          path: |
+            engine/setup_action.log
+            engine/build_action.log
+            engine/pack_action.log
+            engine/setup_upload_action.log
+            engine/upload_action.log
+            engine/bin/runtime/logs/
+            engine/bin/runtime/reports/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: "🧹 Cleanup Ninja credentials"
+        if: always()
+        shell: bash
+        run: rm -f -- engine/rclone.conf engine/bin/runtime/config/rclone.conf
