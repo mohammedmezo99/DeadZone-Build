@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v7
+  group: deadzone-build-machine-bootstrap-v8
   cancel-in-progress: true
 
 jobs:
@@ -66,133 +66,6 @@ jobs:
           lfs: false
           persist-credentials: false
 
-      - name: Discover and import SuperConfig
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          candidates=(
-            DeadZone_Lite
-            DeadZone_Lite_Next
-            mezo_lite
-            backup
-            xiaomi-toolbuild
-            build_xiaomi-toolbuild_mezo
-            DeadZone_GamingPlus
-            DeadZone_Legend
-            DeadZone_Ninja
-          )
-          headers=(
-            -H "Authorization: Bearer $MACHINE_TOKEN"
-            -H 'Accept: application/vnd.github+json'
-            -H 'X-GitHub-Api-Version: 2022-11-28'
-          )
-          selected_repo=""
-          selected_branch=""
-          selected_prefix=""
-          tree_file="$RUNNER_TEMP/superconfig-tree.json"
-
-          for repo in "${candidates[@]}"; do
-            metadata="$RUNNER_TEMP/${repo}-metadata.json"
-            if ! curl -fsSL "${headers[@]}" \
-              "https://api.github.com/repos/mohammedmezo99/${repo}" -o "$metadata"; then
-              continue
-            fi
-            branch="$(jq -r '.default_branch // "main"' "$metadata")"
-            if ! curl -fsSL "${headers[@]}" \
-              "https://api.github.com/repos/mohammedmezo99/${repo}/git/trees/${branch}?recursive=1" \
-              -o "$tree_file"; then
-              continue
-            fi
-            prefix="$(python3 - "$tree_file" <<'PY'
-          import json
-          import sys
-          from collections import Counter
-          from pathlib import PurePosixPath
-
-          document = json.load(open(sys.argv[1], encoding="utf-8"))
-          paths = [
-              str(item.get("path") or "")
-              for item in document.get("tree", [])
-              if item.get("type") in {"blob", "tree"}
-          ]
-          roots = []
-          for raw in paths:
-              parts = PurePosixPath(raw).parts
-              lowered = [part.casefold() for part in parts]
-              if "superconfig" in lowered:
-                  index = lowered.index("superconfig")
-                  roots.append("/".join(parts[: index + 1]))
-          if roots:
-              print(Counter(roots).most_common(1)[0][0])
-              raise SystemExit(0)
-
-          metadata_files = [
-              PurePosixPath(raw)
-              for raw in paths
-              if PurePosixPath(raw).name in {"parts_info", "super"}
-          ]
-          inferred = []
-          for path in metadata_files:
-              if len(path.parts) >= 3:
-                  inferred.append("/".join(path.parts[:-2]))
-          if inferred:
-              root, count = Counter(inferred).most_common(1)[0]
-              if count >= 2:
-                  print(root)
-          PY
-            )"
-            if [[ -n "$prefix" ]]; then
-              selected_repo="$repo"
-              selected_branch="$branch"
-              selected_prefix="$prefix"
-              break
-            fi
-          done
-
-          [[ -n "$selected_repo" && -n "$selected_prefix" ]] || {
-            echo 'No real SuperConfig source was found in the configured repositories.' >&2
-            exit 1
-          }
-
-          echo "Using SuperConfig source: ${selected_repo}:${selected_prefix}"
-          source_root="$RUNNER_TEMP/superconfig-source"
-          rm -rf "$source_root" legacy/bin/device/SuperConfig
-          mkdir -p "$source_root" legacy/bin/device/SuperConfig
-          auth="$(printf 'x-access-token:%s' "$MACHINE_TOKEN" | base64 -w0)"
-          echo "::add-mask::$auth"
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
-            clone --depth=1 --filter=blob:none --sparse \
-            --branch "$selected_branch" \
-            "https://github.com/mohammedmezo99/${selected_repo}.git" \
-            "$source_root"
-          git -C "$source_root" sparse-checkout set "$selected_prefix"
-          [[ -d "$source_root/$selected_prefix" ]] || {
-            echo "Resolved SuperConfig path is absent after sparse checkout: $selected_prefix" >&2
-            exit 1
-          }
-          cp -a "$source_root/$selected_prefix/." legacy/bin/device/SuperConfig/
-
-          python3 - "$selected_repo" "$selected_branch" "$selected_prefix" \
-            > legacy/bin/device/SuperConfig/.deadzone-source.json <<'PY'
-          import json
-          import sys
-          print(json.dumps({
-              "schema_version": 1,
-              "repository": f"mohammedmezo99/{sys.argv[1]}",
-              "ref": sys.argv[2],
-              "path": sys.argv[3],
-          }, indent=2, sort_keys=True))
-          PY
-
-          device_count="$(find legacy/bin/device/SuperConfig -mindepth 1 -maxdepth 1 -type d | wc -l)"
-          metadata_count="$(find legacy/bin/device/SuperConfig -type f \( -name parts_info -o -name super \) | wc -l)"
-          ((device_count > 0 && metadata_count > 0)) || {
-            echo 'Discovered SuperConfig source contains no usable device metadata.' >&2
-            exit 1
-          }
-          echo "Imported SuperConfig devices: $device_count; metadata files: $metadata_count"
-          rm -rf "$source_root" "$tree_file" "$RUNNER_TEMP"/*-metadata.json
-
       - name: Install standard Linux fallbacks
         shell: bash
         run: |
@@ -215,7 +88,16 @@ jobs:
           rm -f .github/workflows/bootstrap-internal-tools.yml reports/bootstrap-internal-tools.log
           git config user.name deadzone-machine-bootstrap
           git config user.email actions@users.noreply.github.com
-          git add -A tools assets runtime/template .github/workflows reports
+
+          mapfile -t large_files < <(find tools assets -type f -size +90M -print | sort)
+          if ((${#large_files[@]})); then
+            git lfs install --local
+            for path in "${large_files[@]}"; do
+              git lfs track "$path"
+            done
+          fi
+
+          git add -A tools assets runtime/template .github/workflows .gitattributes
           git commit -m 'Store complete toolchain and runtime assets inside Machine'
           git pull --rebase origin main
           git push origin HEAD:main
