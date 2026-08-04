@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap
+  group: deadzone-build-machine-bootstrap-v2
   cancel-in-progress: true
 
 jobs:
@@ -25,6 +25,24 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: true
+
+      - name: Record bootstrap run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .github/bootstrap
+          jq -n \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg commit "$GITHUB_SHA" \
+            '{run_id:$run_id,run_attempt:$run_attempt,trigger_commit:$commit}' \
+            > .github/bootstrap/run.json
+          git config user.name deadzone-bootstrap-trace
+          git config user.email actions@users.noreply.github.com
+          git add .github/bootstrap/run.json
+          git commit -m 'Record active Machine bootstrap run'
+          git pull --rebase origin main
+          git push origin HEAD:main
 
       - name: Checkout DeadZone Machine
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -78,10 +96,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm -rf machine legacy
+          rm -rf machine legacy .github/bootstrap
           git rm -f .github/workflows/bootstrap-machine-tools.yml
           git config user.name deadzone-build-cleanup
           git config user.email actions@users.noreply.github.com
+          git add -A .github
           git commit -m 'Remove completed Machine bootstrap workflow'
           git pull --rebase origin main
           git push origin HEAD:main
