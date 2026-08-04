@@ -6,6 +6,7 @@ on:
   push:
     paths:
       - .github/workflows/certify-zircon-os3-v7.yml
+      - .github/certification/machine-bundle-url.txt
 
 permissions:
   contents: write
@@ -15,7 +16,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MACHINE_BUNDLE_URL: "https://sdmntprnortheu.oaiusercontent.com/files/00000000-58b8-81f4-8489-7f4cc69f5dc9/raw?se=2026-08-04T19:33:21Z&sp=r&sv=2026-02-06&sr=b&scid=a45ab8df-2e6a-5745-9281-4db05a7ca65d&skoid=ba81670d-b682-4d2d-9682-ac0ffdfb3fa1&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-08-04T06:21:02Z&ske=2026-08-05T06:21:02Z&sks=b&skv=2026-02-06&sig=pX%2Bnz98%2BConSpx1gebcggxLagmajOyNef/LYan9QeU0%3D"
   ROM_URL: "https://bkt-sgp-miui-ota-update-alisgp.oss-ap-southeast-1.aliyuncs.com/OS3.0.303.0.WNOCNXM/zircon-ota_full-OS3.0.303.0.WNOCNXM-user-16.0-09c35a83d6.zip"
 
 jobs:
@@ -57,10 +57,12 @@ jobs:
           set -Eeuo pipefail
           archive="$RUNNER_TEMP/machine-certification-bundle.zip"
           payload="$RUNNER_TEMP/machine-certification-payload"
+          bundle_url=$(tr -d '\r\n' < .github/certification/machine-bundle-url.txt)
+          [[ "$bundle_url" == https://* ]] || { echo 'Invalid Machine bundle URL' >&2; exit 1; }
           rm -rf "$payload"
           mkdir -p "$payload"
           curl --fail --location --show-error --retry 5 --retry-all-errors \
-            "$MACHINE_BUNDLE_URL" --output "$archive"
+            "$bundle_url" --output "$archive"
           unzip -q "$archive" -d "$payload"
           (cd "$payload" && sha256sum -c deadzone-machine-certification.tar.gz.sha256)
 
