@@ -99,7 +99,7 @@ jobs:
           mkdir -p machine
           tar -xzf "$payload/deadzone-machine-certification.tar.gz" -C machine
           [[ -x machine/bin/deadzone-machine ]]
-          [[ -x machine/checks/verify_edition_manifest.sh ]]
+          [[ -s machine/checks/verify_edition_manifest.sh ]]
           test ! -e machine/config/SuperConfig/zircon/super
           test ! -e machine/core/rebuild/super_config.py
           grep -q 'as $required' machine/core/edition.sh
