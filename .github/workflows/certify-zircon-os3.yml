@@ -77,15 +77,24 @@ jobs:
         run: bash .deadzone-secrets/load-build.sh lite
 
       - name: Checkout DeadZone Machine
-        uses: actions/checkout@v5
-        with:
-          repository: mohammedmezo99/DeadZone-Machine
-          token: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
-          ref: main
-          path: machine
-          fetch-depth: 1
-          lfs: true
-          persist-credentials: false
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          token="${PRIVATE_REPO_TOKEN:-${GH_TOKEN:-}}"
+          [[ -n "$token" ]] || { echo "Private Machine token is missing" >&2; exit 1; }
+          auth="$(printf 'x-access-token:%s' "$token" | base64 -w0)"
+          echo "::add-mask::$auth"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/mohammedmezo99/DeadZone-Machine \
+            >/dev/null
+          rm -rf machine
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            clone --depth=1 --branch main \
+            https://github.com/mohammedmezo99/DeadZone-Machine.git machine
+          git -C machine lfs install --local
+          git -C machine -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" lfs pull
 
       - name: Checkout Lite Edition
         uses: actions/checkout@v5
