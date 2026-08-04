@@ -10,13 +10,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: deadzone-build-machine-bootstrap-v4
+  group: deadzone-build-machine-bootstrap-v5
   cancel-in-progress: true
 
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       MACHINE_TOKEN: ${{ secrets.DEADZONE_PRIVATE_TOKEN || secrets.PRIVATE_REPO_TOKEN || secrets.GH_TOKEN }}
     steps:
@@ -65,6 +65,42 @@ jobs:
           fetch-depth: 1
           lfs: false
           persist-credentials: false
+
+      - name: Restore pinned SuperConfig database
+        shell: bash
+        env:
+          LEGACY_ARTIFACT_ID: "8863484267"
+        run: |
+          set -Eeuo pipefail
+          archive="$RUNNER_TEMP/deadzone-old-assets.zip"
+          extracted="$RUNNER_TEMP/deadzone-old-superconfig"
+          rm -rf "$extracted"
+          mkdir -p "$extracted"
+          curl --fail --location --show-error \
+            --retry 5 --retry-all-errors \
+            -H "Authorization: Bearer $MACHINE_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/mohammedmezo99/DeadZone_Lite_old/actions/artifacts/${LEGACY_ARTIFACT_ID}/zip" \
+            --output "$archive"
+          unzip -Z1 "$archive" | grep -E '(^|/)SuperConfig/' > "$RUNNER_TEMP/superconfig-members.txt"
+          [[ -s "$RUNNER_TEMP/superconfig-members.txt" ]] || {
+            echo 'Verified legacy artifact contains no SuperConfig members' >&2
+            exit 1
+          }
+          while IFS= read -r member; do
+            unzip -q -o "$archive" "$member" -d "$extracted"
+          done < "$RUNNER_TEMP/superconfig-members.txt"
+          super_root="$(find "$extracted" -type d -name SuperConfig -print -quit)"
+          [[ -n "$super_root" && -d "$super_root" ]] || {
+            echo 'SuperConfig extraction did not create the database root' >&2
+            exit 1
+          }
+          mkdir -p legacy/bin/device
+          rm -rf legacy/bin/device/SuperConfig
+          cp -a "$super_root" legacy/bin/device/SuperConfig
+          test "$(find legacy/bin/device/SuperConfig -type f | wc -l)" -gt 0
+          rm -rf "$archive" "$extracted" "$RUNNER_TEMP/superconfig-members.txt"
 
       - name: Install standard Linux fallbacks
         shell: bash
