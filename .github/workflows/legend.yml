@@ -1,5 +1,5 @@
 name: "DeadZone Legend"
-run-name: "DeadZone Legend • ${{ inputs.request_id }}"
+run-name: "DeadZone Legend  ${{ inputs.request_id }}"
 
 on:
   workflow_dispatch:
