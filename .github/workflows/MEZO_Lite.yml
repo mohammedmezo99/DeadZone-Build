@@ -1,6 +1,6 @@
 name: "✨ DeadZone Lite"
 
-run-name: "✨ DeadZone Lite • ${{ inputs.request_id || github.actor }}"
+run-name: "✨ DeadZone Lite  ${{ inputs.request_id || github.actor }}"
 
 on:
   workflow_dispatch:
